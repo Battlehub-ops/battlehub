@@ -1,5 +1,5 @@
 {
-  "redirects": [
-    { "source": "/", "destination": "/admin", "permanent": true }
+  "routes": [
+    { "src": "/", "dest": "/admin", "status": 308 }
   ]
 }
