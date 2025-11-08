@@ -33,17 +33,25 @@ function StatsChart({ data }) {
   );
 }
 
+// ✅ Set API base dynamically for local & production
+const API_BASE = (() => {
+  const buildTime = process.env.NEXT_PUBLIC_API_BASE;
+
+  if (typeof window !== "undefined") {
+    const runtime = window.__BATTLEHUB_API_BASE__ || buildTime;
+    return runtime || "http://localhost:4000";
+  }
+
+  return buildTime || "http://localhost:4000";
+})();
+
 export default function AdminPage() {
   const [adminKey, setAdminKey] = useState('BattleHub2025Secret!');
   const [users, setUsers] = useState([]);
   const [matches, setMatches] = useState([]);
   const [unpaid, setUnpaid] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [apiBase, setApiBase] = useState(
-    typeof window !== 'undefined'
-      ? window.__BATTLEHUB_API_BASE__ || 'http://localhost:4000'
-      : 'http://localhost:4000'
-  );
+ const [apiBase, setApiBase] = useState(API_BASE);
 
   // fetch admin data
   const fetchData = async () => {
