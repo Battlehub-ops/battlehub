@@ -1,0 +1,258 @@
+'use client';
+
+import React, { useEffect, useMemo, useState } from 'react';
+import axios from 'axios';
+
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '';
+
+function Badge({ state }) {
+  const base = 'inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full';
+  if (state === 'open') return <span className={`${base} bg-green-100 text-green-800`}>Open</span>;
+  if (state === 'closed') return <span className={`${base} bg-gray-200 text-gray-700`}>Closed</span>;
+  if (state === 'paid') return <span className={`${base} bg-blue-100 text-blue-800`}>Paid</span>;
+  return <span className={`${base} bg-yellow-100 text-yellow-800`}>Unpaid</span>;
+}
+
+export default function AdminPage() {
+  const [adminKey, setAdminKey] = useState('BattleHub2025Secret!');
+  const [summary, setSummary] = useState(null);
+  const [matches, setMatches] = useState([]);
+  const [unpaid, setUnpaid] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState('');
+
+  // recreate axios client whenever adminKey changes so header is up-to-date
+  const api = useMemo(() => {
+    return axios.create({
+      baseURL: API_BASE,
+      headers: { 'x-admin-key': adminKey },
+      timeout: 30000, // 30s
+    });
+  }, [adminKey]);
+
+  useEffect(() => {
+    // run initial load once
+    loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function loadData() {
+    setLoading(true);
+    setMsg('');
+    try {
+      // parallel light endpoints for snappy UI
+      const [sumRes, matchesRes, unpaidRes] = await Promise.allSettled([
+        api.get('/admin/summary'),
+        api.get('/admin/matches'),
+        api.get('/admin/unpaid-matches'),
+      ]);
+
+      if (sumRes.status === 'fulfilled') setSummary(sumRes.value.data);
+      else console.warn('summary load failed', sumRes.reason && sumRes.reason.toString());
+
+      if (matchesRes.status === 'fulfilled') setMatches(Array.isArray(matchesRes.value.data) ? matchesRes.value.data : []);
+      else console.warn('matches-lite failed', matchesRes.reason && matchesRes.reason.toString());
+
+      if (unpaidRes.status === 'fulfilled') setUnpaid(Array.isArray(unpaidRes.value.data) ? unpaidRes.value.data : []);
+      else console.warn('unpaid-matches failed', unpaidRes.reason && unpaidRes.reason.toString());
+
+    } catch (err) {
+      console.error('loadData error', err && err.toString());
+      setMsg('Error fetching data — see console');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const fmtUSD = (v) => (typeof v === 'number' ? `$${v.toFixed(2)}` : '-');
+  const fmtDate = (d) => (d ? new Date(d).toLocaleString() : '-');
+
+  return (
+    <main className="min-h-screen bg-gray-50 p-6">
+      <div className="max-w-6xl mx-auto space-y-8">
+        {/* Header */}
+        <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">BattleHub — Admin</h1>
+            <p className="text-gray-600">Manage matchmaking and payouts</p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <input
+              aria-label="admin key"
+              className="border rounded px-3 py-2 text-sm w-64"
+              value={adminKey}
+              onChange={(e) => setAdminKey(e.target.value)}
+            />
+            <button
+              onClick={loadData}
+              className="px-3 py-2 bg-gray-800 text-white rounded hover:bg-gray-700 text-sm"
+            >
+              Refresh
+            </button>
+            <button
+              onClick={async () => {
+                setMsg('Running matchmaking (please check server logs)...');
+                try {
+                  await api.post('/admin/run-matchmaking');
+                  setMsg('Run matchmaking requested. Refresh to see results.');
+                } catch (e) {
+                  console.error('run-matchmaking error', e && e.toString());
+                  setMsg('Run matchmaking failed (see console).');
+                }
+              }}
+              className="px-3 py-2 border rounded bg-white text-sm hover:bg-gray-50"
+            >
+              Run Matchmaking
+            </button>
+            <button
+              onClick={async () => {
+                setMsg('Running batch payout...');
+                try {
+                  await api.post('/admin/batch-payout');
+                  setMsg('Batch payout requested.');
+                } catch (e) {
+                  console.error('batch-payout error', e && e.toString());
+                  setMsg('Batch payout failed (see console).');
+                }
+              }}
+              className="px-3 py-2 border rounded bg-white text-sm hover:bg-gray-50"
+            >
+              Batch Payout
+            </button>
+          </div>
+        </header>
+
+        {/* Summary cards */}
+        <section className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+          <div className="bg-white rounded-2xl shadow p-6">
+            <h3 className="text-gray-600 text-sm font-medium">Total Users</h3>
+            <div className="text-3xl font-bold text-gray-900 mt-2">{summary?.totalUsers ?? '-'}</div>
+          </div>
+
+          <div className="bg-white rounded-2xl shadow p-6">
+            <h3 className="text-gray-600 text-sm font-medium">Platform Revenue (USD)</h3>
+            <div className="text-3xl font-bold text-gray-900 mt-2">{fmtUSD(summary?.platformRevenueUSD || 0)}</div>
+          </div>
+
+          <div className="bg-white rounded-2xl shadow p-6">
+            <h3 className="text-gray-600 text-sm font-medium">Total Payouts (USD)</h3>
+            <div className="text-3xl font-bold text-gray-900 mt-2">{fmtUSD(summary?.totalPayoutsUSD || 0)}</div>
+          </div>
+        </section>
+
+        {/* Unpaid Matches */}
+        <section>
+          <h2 className="text-2xl font-semibold text-gray-900 mb-3">Unpaid Matches</h2>
+          <div className="bg-white rounded-2xl shadow p-4 divide-y">
+            {unpaid?.length > 0 ? (
+              unpaid.map((u) => (
+                <div key={u._id} className="py-3 flex justify-between items-center">
+                  <div>
+                    <p className="font-semibold text-gray-800">{u.battle?.title ?? u._id}</p>
+                    <p className="text-sm text-gray-500">Pot: {fmtUSD(u.potUSD)} • Created: {fmtDate(u.createdAt)}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge state="unpaid" />
+                    <button
+                      onClick={async () => {
+                        try {
+                          await api.post(`/admin/payout/${u._id}`);
+                          setMsg('Payout requested for match. Refresh to confirm.');
+                          loadData();
+                        } catch (e) {
+                          console.error('payout error', e && e.toString());
+                          setMsg('Payout failed (see console).');
+                        }
+                      }}
+                      className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-500 text-sm"
+                    >
+                      Payout
+                    </button>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="py-4 text-gray-600">No unpaid matches</div>
+            )}
+          </div>
+        </section>
+
+        {/* Recent Matches */}
+        <section>
+          <h2 className="text-2xl font-semibold text-gray-900 mb-3">Recent Matches</h2>
+          <div className="space-y-4">
+            {matches.length === 0 && <div className="text-gray-600">No matches found.</div>}
+            {matches.map((m) => (
+              <article key={m._id} className="bg-white rounded-2xl shadow p-6 hover:shadow-md transition">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-800">{m.battle?.title ?? '—'}</h3>
+                    <p className="text-sm text-gray-500">
+                      Sport: {m.battle?.sport ?? '-'} • Pot: {fmtUSD(m.potUSD)} • Created: {fmtDate(m.createdAt)}
+                    </p>
+                  </div>
+                  <div className="text-right flex flex-col items-end gap-2">
+                    <Badge state={m.paid ? 'paid' : (m.battle?.state || 'closed')} />
+                    <div className="text-sm text-gray-700">
+                      Winner Payout: {fmtUSD(m.winnerPayoutUSD ?? 0)}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    onClick={async () => {
+                      setMsg('Running matchmaking for this battle...');
+                      try {
+                        await api.post('/admin/run-matchmaking', { matchId: m._id });
+                        setMsg('Matchmaking requested.');
+                      } catch (e) {
+                        console.error('run matchmaking err', e && e.toString());
+                        setMsg('Run matchmaking failed.');
+                      }
+                    }}
+                    className="px-3 py-2 border rounded-lg bg-gray-50 hover:bg-gray-100 text-sm"
+                  >
+                    Run Matchmaking
+                  </button>
+
+                  <button
+                    disabled={m.paid}
+                    onClick={async () => {
+                      if (m.paid) return;
+                      try {
+                        await api.post(`/admin/payout/${m._id}`);
+                        setMsg('Payout requested. Refresh to confirm.');
+                        loadData();
+                      } catch (e) {
+                        console.error('payout error', e && e.toString());
+                        setMsg('Payout failed (see console).');
+                      }
+                    }}
+                    className={`px-3 py-2 rounded-lg text-sm ${m.paid ? 'bg-gray-300 text-gray-700' : 'bg-blue-600 text-white hover:bg-blue-500'}`}
+                  >
+                    {m.paid ? 'Paid' : 'Payout'}
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      console.log(m);
+                      setMsg('Match JSON printed to console.');
+                    }}
+                    className="px-3 py-2 border rounded-lg bg-gray-100 hover:bg-gray-200 text-sm"
+                  >
+                    View JSON
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        {msg && <div className="bg-yellow-50 text-yellow-800 px-4 py-2 rounded-lg">{msg}</div>}
+        <div className="text-sm text-gray-500">Matches: {matches.length} • Loading: {loading ? 'yes' : 'no'}</div>
+      </div>
+    </main>
+  );
+}

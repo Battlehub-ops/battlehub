@@ -1,0 +1,232 @@
+'use client';
+
+import React, { useEffect, useState } from 'react';
+import axios from 'axios';
+
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
+
+export default function AdminPage() {
+  const [adminKey, setAdminKey] = useState('');
+  const [summary, setSummary] = useState(null);
+  const [matches, setMatches] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [expanded, setExpanded] = useState({}); // matchId -> bool
+
+  function apiClient(key) {
+    return axios.create({
+      baseURL: API_BASE,
+      headers: key ? { 'x-admin-key': key } : {},
+      timeout: 8000,
+    });
+  }
+
+  async function loadSummary() {
+    setMsg(null);
+    setLoading(true);
+    try {
+      const api = apiClient(adminKey);
+      // Try the simple summary endpoint first (if your backend has it),
+      // otherwise fallback to fetching counts by calling a known endpoint.
+      let res;
+      try {
+        res = await api.get('/admin/summary');
+        setSummary(res.data);
+      } catch (err) {
+        // fallback: try fetching matches/users/transactions counts
+        const [mres, ures, tres] = await Promise.allSettled([
+          api.get('/admin/matches'),
+          api.get('/admin/users'),
+          api.get('/admin/transactions'),
+        ]);
+        const fallback = {};
+        if (mres.status === 'fulfilled') fallback.totalMatches = Array.isArray(mres.value.data) ? mres.value.data.length : null;
+        if (ures.status === 'fulfilled') fallback.totalUsers = Array.isArray(ures.value.data) ? ures.value.data.length : null;
+        if (tres.status === 'fulfilled') fallback.totalTransactions = Array.isArray(tres.value.data) ? tres.value.data.length : null;
+        setSummary(fallback);
+      }
+    } catch (err) {
+      console.error('loadSummary error', err);
+      setMsg(`Load summary failed: ${err?.message || err}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadMatches() {
+    setMsg(null);
+    setLoading(true);
+    try {
+      const api = apiClient(adminKey);
+      const res = await api.get('/admin/matches');
+      // expecting array of match objects
+      setMatches(Array.isArray(res.data) ? res.data : []);
+    } catch (err) {
+      console.error('loadMatches error', err);
+      setMsg(`Load matches failed: ${err?.message || err}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    // try to load matches once on mount (but don't require admin key)
+    loadMatches().catch(()=>{});
+  }, []);
+
+  async function runMatchmaking() {
+    setMsg(null);
+    setLoading(true);
+    try {
+      const api = apiClient(adminKey);
+      const res = await api.post('/admin/run-matchmaking');
+      setMsg(res.data?.ok ? `Matchmaking run — processed ${res.data.processed?.length || 0} battles` : JSON.stringify(res.data));
+      // reload matches/summary
+      await loadMatches();
+      await loadSummary();
+    } catch (err) {
+      console.error('runMatchmaking error', err);
+      setMsg(`Run matchmaking failed: ${err?.message || err}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function payoutMatch(matchId) {
+    if (!confirm(`Payout match ${matchId}?`)) return;
+    setMsg(null);
+    setLoading(true);
+    try {
+      const api = apiClient(adminKey);
+      const res = await api.post(`/admin/payout/${matchId}`);
+      setMsg(res.data?.ok ? `Payout applied for ${matchId}` : JSON.stringify(res.data));
+      await loadMatches();
+      await loadSummary();
+    } catch (err) {
+      console.error('payoutMatch error', err);
+      setMsg(`Payout failed: ${err?.response?.data?.error || err?.message || err}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function badgeForState(state) {
+    if (!state) return null;
+    const cls = state === 'open' ? 'badge-open' : 'badge-closed';
+    return <span className={cls} style={{ marginLeft: 8 }}>{state}</span>;
+  }
+
+  function matchPaidLabel(m) {
+    if (m.paid || m.payoutProcessed) return <div className="text-sm font-medium">Paid</div>;
+    return <div className="text-sm font-medium text-amber-700">Unpaid</div>;
+  }
+
+  function winnerName(m) {
+    try {
+      // match.winnerEntry is id; entries array has objects with _id and user
+      if (!m.entries) return '—';
+      const winnerEntry = m.entries.find(e => (e._id || e.id) === (m.winnerEntry || m.winnerEntryId));
+      if (winnerEntry && winnerEntry.user) return winnerEntry.user.name || winnerEntry.user.email || 'user';
+      // some matches have winnerUserId/winner
+      if (m.winnerUser) return m.winnerUser;
+      if (m.winnerUserId) return m.winnerUserId;
+      return '—';
+    } catch (err) {
+      return '—';
+    }
+  }
+
+  return (
+    <div className="p-6">
+      <h1 className="text-3xl font-extrabold mb-2">BattleHub — Admin</h1>
+      <p className="mb-4 text-gray-600">Manage matchmaking and payouts</p>
+
+      <div className="mb-4 flex items-center gap-2">
+        <input
+          placeholder="admin key (optional)"
+          value={adminKey}
+          onChange={e => setAdminKey(e.target.value)}
+          className="border px-3 py-1 rounded"
+          style={{ minWidth: 320 }}
+        />
+        <button onClick={() => { loadSummary(); loadMatches(); }} className="border rounded px-3 py-1">Load Summary</button>
+        <button onClick={runMatchmaking} className="border rounded px-3 py-1">Run Matchmaking</button>
+        <button onClick={() => { setMatches([]); setSummary(null); setMsg(null); }} className="border rounded px-3 py-1">Clear</button>
+        {loading && <div className="ml-3 text-sm text-gray-500">loading…</div>}
+      </div>
+
+      {msg && <div className="admin-card mb-4 text-sm text-red-700">{String(msg)}</div>}
+
+      <section className="admin-card mb-6">
+        <h2 className="text-xl font-semibold mb-2">Summary</h2>
+        <pre className="text-sm bg-gray-50 p-4 rounded" style={{ whiteSpace: 'pre-wrap' }}>{summary ? JSON.stringify(summary, null, 2) : '{}'}</pre>
+      </section>
+
+      <section className="mb-6">
+        <h2 className="text-xl font-semibold mb-3">Recent Matches</h2>
+        {matches.length === 0 ? (
+          <div className="admin-card">No matches found.</div>
+        ) : (
+          <ul className="space-y-3">
+            {matches.map(m => {
+              const battle = m.battle || m.battleId || {};
+              const mid = m._id || m.matchId || m.id;
+              return (
+                <li key={mid} className="bg-white rounded-lg shadow-sm p-4 flex justify-between items-start">
+                  <div>
+                    <div className="text-sm text-gray-600 mb-1">
+                      <strong className="font-mono">{mid}</strong>
+                      {battle && battle.title ? <span className="ml-3 italic text-gray-700">— {battle.title}</span> : null}
+                      {badgeForState(battle && battle.state)}
+                    </div>
+
+                    <div className="text-sm text-gray-600">
+                      <span className="mr-4">Pot: <strong>${m.potUSD ?? m.pot ?? '—'}</strong></span>
+                      <span className="mr-4">Payout: <strong>${m.winnerPayoutUSD ?? m.winnerPayout ?? '—'}</strong></span>
+                      <span className="mr-4">Platform: <strong>${m.platformCutUSD ?? m.platformCut ?? '—'}</strong></span>
+                    </div>
+
+                    <div className="text-sm text-gray-700 mt-2">Winner: <strong>{winnerName(m)}</strong></div>
+
+                    {expanded[mid] && (
+                      <div className="mt-2 text-xs text-gray-600 bg-gray-50 p-2 rounded">
+                        <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(m, null, 2)}</pre>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex flex-col items-end gap-2">
+                    {matchPaidLabel(m)}
+                    <div className="space-x-2">
+                      <button
+                        onClick={() => payoutMatch(mid)}
+                        disabled={m.paid || m.payoutProcessed}
+                        className="px-3 py-1 rounded border text-sm hover:bg-gray-100 disabled:opacity-50"
+                      >
+                        {m.paid || m.payoutProcessed ? 'Paid' : 'Payout'}
+                      </button>
+
+                      <button
+                        onClick={() => setExpanded(prev => ({ ...prev, [mid]: !prev[mid] }))}
+                        className="px-3 py-1 rounded border text-sm hover:bg-gray-100"
+                      >
+                        {expanded[mid] ? 'Hide JSON' : 'View JSON'}
+                      </button>
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+
+      <section className="admin-card mt-6">
+        <p className="text-sm text-gray-600">
+          Tip: use the <strong>Run Matchmaking</strong> button to close open battles and create matches, then use <strong>Payout</strong> to apply payouts.
+        </p>
+      </section>
+    </div>
+  );
+}
+

@@ -1,0 +1,8 @@
+[stdout] [dotenv@17.2.3] injecting env (0) from .env -- tip: ✅ audit secrets and track compliance: https://dotenvx.com/ops
+[stdout] [payout] config { apply: true, limit: 0, batchSize: 50, concurrency: 10 }
+[stdout] Connecting to MongoDB...
+[stdout] Connected.
+[stdout] No unpaid matches found.
+[stdout] Disconnected from MongoDB.
+
+[child exit] code=0

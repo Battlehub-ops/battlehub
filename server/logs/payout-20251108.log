@@ -1,0 +1,12 @@
+[dotenv@17.2.3] injecting env (9) from .env -- tip: 📡 add observability to secrets: https://dotenvx.com/ops
+[payout] config { apply: true, limit: 0, batchSize: 50, concurrency: 10 }
+Connecting to MongoDB...
+Connected.
+No unpaid matches found.
+Disconnected from MongoDB.
+[dotenv@17.2.3] injecting env (9) from .env -- tip: 🗂️ backup and recover secrets: https://dotenvx.com/ops
+[payout] config { apply: true, limit: 0, batchSize: 50, concurrency: 10 }
+Connecting to MongoDB...
+Connected.
+No unpaid matches found.
+Disconnected from MongoDB.

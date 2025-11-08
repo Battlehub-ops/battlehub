@@ -1,0 +1,5 @@
+[dotenv@17.2.3] injecting env (9) from .env -- tip: ⚙️  override existing env vars with { override: true }
+[dotenv] injecting env from .env (if present)
+Connecting to MongoDB...
+No unpaid matches found.
+Disconnected from MongoDB.

@@ -1,0 +1,102 @@
+/* Tailwind entry points - required */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---- Base page styles (avoid @apply unknown utilities) ---- */
+:root{
+  --bg: #f8fafc; /* light gray */
+  --surface: #ffffff;
+  --muted: #6b7280;
+  --text: #0f172a;
+  --radius-lg: 12px;
+  --card-shadow: 0 8px 24px rgba(15,23,42,0.06);
+  --brand: #0ea5a4;
+}
+
+html,body,#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  background-color: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Container to constrain content and give breathing room */
+.main-container {
+  max-width: 1180px;
+  margin: 28px auto;
+  padding: 0 20px;
+}
+
+/* Card look used in dashboard */
+.card {
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--card-shadow);
+  padding: 18px;
+}
+
+/* Header styles */
+.admin-header {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.admin-title {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  font-weight: 700;
+  font-size: 28px;
+}
+
+/* Stats tiles row */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0,1fr));
+  gap: 18px;
+  margin: 18px 0 28px;
+}
+.stats-tile {
+  padding: 18px;
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--card-shadow);
+}
+.stats-label { color: var(--muted); font-size: 13px; }
+.stats-value { font-size: 22px; font-weight: 700; margin-top: 6px; }
+
+/* Chart container */
+.chart-wrapper {
+  margin: 12px 0 28px;
+}
+.chart-container {
+  width: 100%;
+  /* explicit min-height to avoid Recharts complaining about zero dimensions */
+  min-height: 320px;
+  height: 360px;
+  border-radius: 10px;
+  background: transparent;
+  box-sizing: border-box;
+  padding: 10px 0;
+}
+
+/* Lists */
+.section {
+  margin: 20px 0;
+}
+.section h2 { font-size: 22px; margin-bottom: 12px; }
+
+/* Small responsive tweaks */
+@media (max-width: 900px) {
+  .stats-grid { grid-template-columns: 1fr; }
+  .admin-title { font-size: 22px; }
+  .chart-container { min-height: 260px; height: 300px; }
+}

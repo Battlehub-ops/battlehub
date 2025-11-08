@@ -1,0 +1,496 @@
+// index.js (CommonJS) - BattleHub backend with run-matchmaking
+require('dotenv').config();
+const express = require('express');
+const mongoose = require('mongoose');
+const cors = require('cors');
+const bodyParser = require('body-parser');
+const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+
+// models (assumes these exist in ./models)
+const Battle = require('./models/Battle');
+const Entry = require('./models/Entry');
+const Match = require('./models/Match');
+const Transaction = require('./models/Transaction');
+const User = require('./models/User');
+
+const app = express();
+app.use(cors());
+app.use(bodyParser.json());
+
+const PORT = process.env.PORT || 4000;
+const JWT_SECRET = process.env.JWT_SECRET || 'BattleHub2025Secret!';
+const ADMIN_KEY = process.env.ADMIN_KEY || 'BattleHub2025Secret!';
+
+console.log('[dotenv] injecting env from .env (if present)');
+console.log('🔌 Connecting to MongoDB...');
+mongoose.connect(process.env.MONGO_URI).then(() => {
+  console.log('✅ MongoDB connected successfully');
+}).catch(err => {
+  console.error('❌ MongoDB connection error:', err && err.message);
+});
+
+// -------------------- Auth helpers --------------------
+function requireAuth(req, res, next) {
+  try {
+    const auth = req.headers.authorization || '';
+    if (!auth.startsWith('Bearer ')) return res.status(401).json({ error: 'Missing auth token' });
+    const token = auth.slice(7);
+    const payload = jwt.verify(token, JWT_SECRET);
+    req.user = payload; // { id, email, role }
+    return next();
+  } catch (err) {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+}
+
+function requireAdminKey(req, res, next) {
+  const key = req.headers['x-admin-key'] || req.query.admin_key;
+  if (!key || key !== ADMIN_KEY) return res.status(401).json({ error: 'Invalid admin key' });
+  next();
+}
+
+// -------------------- Basic routes --------------------
+app.get('/', (req, res) => res.json({ message: 'BattleHub backend running' }));
+
+// Minimal login endpoint for testing (creates user if not exists)
+app.post('/users/register', async (req, res) => {
+  try {
+    const { email, name, password } = req.body || {};
+    if (!email) return res.status(400).json({ error: 'Email is required' });
+
+    let user = await User.findOne({ email });
+    if (user) return res.status(409).json({ error: 'User already exists', user });
+
+    user = await User.create({ email, name, password, role: 'user', balanceUSD: 0, verified: false });
+    const token = jwt.sign({ id: user._id.toString(), email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+    return res.status(201).json({ user, token });
+  } catch (err) {
+    console.error('Error /users/register', err && err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/users/login', async (req, res) => {
+  try {
+    const { email } = req.body || {};
+    if (!email) return res.status(400).json({ error: 'Email required' });
+    let user = await User.findOne({ email });
+    if (!user) user = await User.create({ email, name: email.split('@')[0], balanceUSD: 0, role: 'user' });
+    const token = jwt.sign({ id: user._id.toString(), email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+    return res.json({ user, token });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ------------------ begin admin payout route ------------------
+/**
+ * POST /admin/payout/:matchId
+ * Admin-only endpoint to pay a match winner (creates transactions and updates balances).
+ * Header: x-admin-key: <admin key>  (compares to process.env.ADMIN_KEY)
+ */
+app.post('/admin/payout/:matchId', async (req, res) => {
+  try {
+    const adminKey = req.get('x-admin-key') || '';
+    if (!process.env.ADMIN_KEY || adminKey !== process.env.ADMIN_KEY) {
+      return res.status(401).json({ error: 'Invalid admin key' });
+    }
+
+    const matchId = req.params.matchId;
+    if (!matchId) return res.status(400).json({ error: 'Missing matchId' });
+
+    // Load match with entries and users
+    const match = await Match.findById(matchId)
+      .populate({
+        path: 'entries',
+        populate: { path: 'user', select: 'name email balanceUSD' }
+      })
+      .populate('battle');
+
+    if (!match) return res.status(404).json({ error: 'Match not found', matchId });
+
+    if (match.payoutProcessed || match.paid) {
+      return res.status(400).json({ error: 'Payout already processed for this match', matchId });
+    }
+
+    // Determine winner entry document
+    const winnerEntryId = match.winnerEntry && match.winnerEntry.toString ? match.winnerEntry.toString() : match.winnerEntry;
+    const winnerEntry = match.entries.find(e => e._id.toString() === winnerEntryId);
+    if (!winnerEntry) {
+      return res.status(400).json({ error: 'Winner entry not found on match', matchId });
+    }
+
+    const winnerUser = winnerEntry.user;
+    if (!winnerUser) {
+      return res.status(400).json({ error: 'Winner user not found (entry missing user)' });
+    }
+
+    // Calculate payout amounts (use stored fields if present, otherwise derive)
+    const potUSD = (typeof match.potUSD === 'number' && match.potUSD > 0) ? match.potUSD : (Array.isArray(match.entries) ? match.entries.length * (match.battle?.entryFeeUSD || 0) : 0);
+    const platformCutUSD = (typeof match.platformCutUSD === 'number' && match.platformCutUSD >= 0) ? match.platformCutUSD : +(potUSD * 0.15).toFixed(2);
+    const winnerPayoutUSD = (typeof match.winnerPayoutUSD === 'number' && match.winnerPayoutUSD >= 0) ? match.winnerPayoutUSD : +(potUSD - platformCutUSD).toFixed(2);
+
+    // Apply payout: update user balance and create two transaction records
+    // (Wrap in a simple sequence - MongoDB multi-document transactions require replica set config; keep simple for local/test)
+    const updatedUser = await User.findByIdAndUpdate(
+      winnerUser._id,
+      { $inc: { balanceUSD: winnerPayoutUSD } },
+      { new: true }
+    );
+
+    // record payout transaction
+    await Transaction.create({
+      user: updatedUser._id,
+      match: match._id,
+      amountUSD: winnerPayoutUSD,
+      type: 'payout',
+      note: `Payout for match ${match._id} (pot: ${potUSD}, platform cut: ${platformCutUSD})`
+    });
+
+    // record platform fee transaction (user=null)
+    await Transaction.create({
+      user: null,
+      match: match._id,
+      amountUSD: platformCutUSD,
+      type: 'platform_fee',
+      note: `Platform cut for match ${match._id}`
+    });
+
+    // mark match as paid / processed
+    match.paid = true;
+    match.payoutProcessed = true;
+    match.payoutAt = new Date();
+    // ensure pot/winner/cut stored
+    match.potUSD = potUSD;
+    match.winnerPayoutUSD = winnerPayoutUSD;
+    match.platformCutUSD = platformCutUSD;
+    await match.save();
+
+    return res.json({
+      ok: true,
+      matchId: match._id.toString(),
+      winnerUserId: updatedUser._id.toString(),
+      updatedBalanceUSD: updatedUser.balanceUSD,
+      winnerPayoutUSD,
+      platformCutUSD
+    });
+  } catch (err) {
+    console.error('POST /admin/payout/:matchId error', err && err.stack ? err.stack : err);
+    return res.status(500).json({ error: err.message || String(err) });
+  }
+});
+// ------------------ end admin payout route ------------------
+
+// -------------------- Battles --------------------
+// Create battle (open by default)
+app.post('/battles/create', requireAuth, async (req, res) => {
+  try {
+    const { title, sport, entryFeeUSD, startAt } = req.body || {};
+    if (!title || !sport || typeof entryFeeUSD === 'undefined') {
+      return res.status(400).json({ error: 'title, sport and entryFeeUSD are required' });
+    }
+
+    const battle = await Battle.create({
+      title,
+      sport,
+      entryFeeUSD: Number(entryFeeUSD),
+      startAt: startAt ? new Date(startAt) : null,
+      state: 'open'
+    });
+
+    return res.status(201).json({ battle });
+  } catch (err) {
+    console.error('Error /battles/create', err && err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Join battle (test-mode: mark paid=true, locked false/true as needed)
+app.post('/battles/:id/join', requireAuth, async (req, res) => {
+  try {
+    const battleId = req.params.id;
+    const userId = req.user && req.user.id;
+    if (!userId) return res.status(401).json({ error: 'Not authenticated' });
+
+    const battle = await Battle.findById(battleId);
+    if (!battle) return res.status(404).json({ error: 'Battle not found' });
+
+    if (battle.state !== 'open') return res.status(400).json({ error: 'Battle not open' });
+
+    const already = await Entry.findOne({ battle: battle._id, user: userId });
+    if (already) return res.status(409).json({ error: 'Already joined', entry: already });
+
+    // test-mode: paid true (real payment integration later)
+    const entry = await Entry.create({
+      user: userId,
+      battle: battle._id,
+      stripeSessionId: null,
+      paid: true,
+      locked: false
+    });
+
+    return res.json({ message: 'Entry created (test mode, paid=true)', entry });
+  } catch (err) {
+    console.error('Error /battles/:id/join', err && err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// List entries for battle
+app.get('/battles/:id/entries', async (req, res) => {
+  try {
+    const entries = await Entry.find({ battle: req.params.id }).populate('user');
+    return res.json(entries);
+  } catch (err) {
+    console.error('GET /battles/:id/entries', err && err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// -------------------- Matches --------------------
+app.get('/matches', async (req, res) => {
+  try {
+    const unpaidOnly = req.query.unpaid === 'true';
+    const q = {};
+    if (unpaidOnly) q.payoutProcessed = { $ne: true };
+    const matches = await Match.find(q)
+      .sort({ createdAt: -1 })
+      .populate({
+        path: 'entries',
+        populate: { path: 'user', select: 'name email balanceUSD' }
+      })
+      .populate('battle');
+    return res.json(matches);
+  } catch (err) {
+    console.error('GET /matches error', err && err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/matches/:id', async (req, res) => {
+  try {
+    const m = await Match.findById(req.params.id)
+      .populate({
+        path: 'entries',
+        populate: { path: 'user', select: 'name email balanceUSD' }
+      })
+      .populate('battle');
+    if (!m) return res.status(404).json({ error: 'Match not found' });
+    return res.json(m);
+  } catch (err) {
+    console.error('GET /matches/:id', err && err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// -------------------- Admin summary & payout-unpaid --------------------
+app.get('/admin/summary', requireAdminKey, async (req, res) => {
+  try {
+    const totalUsers = await User.countDocuments();
+    const totalBattles = await Battle.countDocuments();
+    const totalMatches = await Match.countDocuments();
+    const transactions = await Transaction.find();
+    const totalPayoutsUSD = transactions.filter(t => t.type === 'payout').reduce((a,t) => a + (t.amountUSD||0), 0);
+    const platformRevenueUSD = transactions.filter(t => t.type === 'platform_fee').reduce((a,t) => a + (t.amountUSD||0), 0);
+    const unpaidMatchesCount = await Match.countDocuments({ payoutProcessed: { $ne: true } });
+
+    return res.json({ totalUsers, totalBattles, totalMatches, totalPayoutsUSD, platformRevenueUSD, unpaidMatchesCount });
+  } catch (err) {
+    console.error('GET /admin/summary', err && err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/admin/payout-unpaid', requireAdminKey, async (req, res) => {
+  try {
+    const unpaidMatches = await Match.find({ payoutProcessed: { $ne: true } });
+    if (!unpaidMatches.length) return res.json({ ok: true, message: 'No unpaid matches' });
+
+    const processed = [];
+    for (const m of unpaidMatches) {
+      if (!m.winnerEntry) continue;
+      const winnerEntry = await Entry.findById(m.winnerEntry).populate('user');
+      if (!winnerEntry || !winnerEntry.user) continue;
+      const u = winnerEntry.user;
+      u.balanceUSD = (u.balanceUSD || 0) + (m.winnerPayoutUSD || 0);
+      await u.save();
+
+      await Transaction.create({
+        user: u._id,
+        match: m._id,
+        amountUSD: m.winnerPayoutUSD || 0,
+        type: 'payout',
+        note: `Batch payout for match ${m._id}`
+      });
+
+      if (m.platformCutUSD) {
+        await Transaction.create({
+          user: null,
+          match: m._id,
+          amountUSD: m.platformCutUSD,
+          type: 'platform_fee',
+          note: `Platform cut for match ${m._id}`
+        });
+      }
+
+      m.payoutProcessed = true;
+      m.paid = true;
+      m.payoutAt = new Date();
+      await m.save();
+
+      processed.push({ matchId: m._id, winner: u._id.toString(), winnerPayoutUSD: m.winnerPayoutUSD, platformCutUSD: m.platformCutUSD });
+    }
+
+    return res.json({ ok: true, processed });
+  } catch (err) {
+    console.error('POST /admin/payout-unpaid', err && err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// -------------------- NEW: run-matchmaking --------------------
+app.post('/admin/run-matchmaking', requireAdminKey, async (req, res) => {
+  try {
+    // 1) Find open battles with at least 2 paid & locked entries
+    const openBattles = await Battle.find({ state: 'open' });
+    const processed = [];
+
+    for (const battle of openBattles) {
+      // gather paid+locked entries for this battle
+      const entries = await Entry.find({ battle: battle._id, paid: true }).populate('user');
+      // require at least 2 entries to run matchmaking
+      if (!entries || entries.length < 2) continue;
+
+      // close the battle so new joins don't get in
+      battle.state = 'closed';
+      await battle.save();
+
+      // create match record
+      const matchEntries = entries.map(e => e._id);
+      const potUSD = (entries.length * (battle.entryFeeUSD || 0));
+      const platformCutUSD = +(potUSD * 0.15).toFixed(2); // 15% cut
+      const winnerPayoutUSD = +(potUSD - platformCutUSD).toFixed(2);
+
+      // seed generation for audit: random bytes + timestamp, store source as seed
+      const rand = crypto.randomBytes(32).toString('hex');
+      const ts = Date.now().toString();
+      const seed = `${rand}|${ts}`;
+
+      // deterministically pick index from HMAC(seed)
+      const hmac = crypto.createHmac('sha256', rand).update(ts).digest('hex');
+      // convert hmac hex to bigint
+      const hmacBig = BigInt('0x' + hmac);
+      const chosenIndex = Number(hmacBig % BigInt(entries.length));
+
+      const winnerEntry = entries[chosenIndex];
+
+      const match = await Match.create({
+        battle: battle._id,
+        entries: matchEntries,
+        winnerEntry: winnerEntry._id,
+        potUSD,
+        winnerPayoutUSD,
+        platformCutUSD,
+        seed,
+        createdAt: new Date()
+      });
+
+      // mark entries locked=true
+      await Entry.updateMany({ _id: { $in: matchEntries } }, { $set: { locked: true } });
+
+      processed.push({
+        battleId: battle._id.toString(),
+        matchId: match._id.toString(),
+        winnerEntry: winnerEntry._id.toString()
+      });
+    }
+
+    return res.json({ ok: true, processed });
+  } catch (err) {
+    console.error('POST /admin/run-matchmaking error', err && err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// -------------------- Admin: simple users/transactions --------------------
+app.get('/admin/users', requireAdminKey, async (req, res) => {
+  try {
+    const users = await User.find().sort({ createdAt: -1 }).select('-password');
+    return res.json(users);
+  } catch (err) {
+    console.error('GET /admin/users', err && err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/admin/transactions', requireAdminKey, async (req, res) => {
+  try {
+    const tx = await Transaction.find().sort({ createdAt: -1 });
+    return res.json(tx);
+  } catch (err) {
+    console.error('GET /admin/transactions', err && err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// -------------------- Start Server --------------------
+app.listen(PORT, () => {
+  console.log(`🚀 BattleHub server listening on port ${PORT}`);
+});
+
+/**
+ * Admin: verify match fairness (seed audit)
+ * GET /admin/match/:id/verify
+ * Requires the existing Match model in index.js
+ */
+app.get('/admin/match/:id/verify', async (req, res) => {
+  try {
+    const matchId = req.params.id;
+    if (!matchId) return res.status(400).json({ error: 'Missing match id' });
+
+    // Find match and populate entries -> user (must match how your models are set up)
+    const match = await Match.findById(matchId)
+      .populate({
+        path: 'entries',
+        populate: { path: 'user', select: 'name email' }
+      });
+
+    if (!match) return res.status(404).json({ error: 'Match not found' });
+
+    // parse stored seed (format: "<seed>|<ts>")
+    const seedAndTs = (match.seed || '').split('|');
+    const seed = seedAndTs[0] || '';
+    const ts = seedAndTs[1] || '';
+
+    // recompute a hash for audit (SHA-256)
+    const crypto = require('crypto');
+    const recomputedHash = crypto.createHash('sha256').update(seed + '|' + ts).digest('hex');
+
+    // Build entries list for response
+    const entries = (match.entries || []).map((e, i) => ({
+      index: i,
+      id: e._id,
+      userEmail: e.user ? e.user.email : null,
+      userName: e.user ? e.user.name : null
+    }));
+
+    // chosenIndex: if winnerEntry present, find its index
+    const chosenIndex = match.winnerEntry
+      ? entries.findIndex(e => e.id.toString() === (match.winnerEntry && match.winnerEntry.toString()))
+      : null;
+
+    res.json({
+      matchId: match._id,
+      storedSeed: match.seed || null,
+      recomputedHash,
+      seedsMatch: !!seed, // indicates we had seed data (you can change verification logic if needed)
+      chosenIndex,
+      entries,
+      winnerEntryId: match.winnerEntry || null
+    });
+  } catch (err) {
+    console.error('GET /admin/match/:id/verify error', err && err.message);
+    res.status(500).json({ error: err.message });
+  }
+});

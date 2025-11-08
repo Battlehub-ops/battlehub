@@ -1,0 +1,252 @@
+k'use client';
+
+import React, { useEffect, useState } from 'react';
+
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
+
+export default function AdminPage() {
+  const [adminKey, setAdminKey] = useState(typeof window !== 'undefined' ? localStorage.getItem('battlehub_admin_key') : '');
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState(null);
+  const [summary, setSummary] = useState(null);
+  const [users, setUsers] = useState([]);
+  const [transactions, setTransactions] = useState([]);
+  const [unpaidMatches, setUnpaidMatches] = useState([]);
+  const [recentMatches, setRecentMatches] = useState([]);
+
+  // headers helper - prefer state, then localStorage, then default
+  function headers() {
+    const keyFromState = adminKey;
+    const keyFromStorage = (typeof window !== 'undefined') ? localStorage.getItem('battlehub_admin_key') : null;
+    const key = keyFromState || keyFromStorage || 'BattleHub2025Secret!';
+    return { 'x-admin-key': key, 'Content-Type': 'application/json' };
+  }
+
+  async function apiGet(path) {
+    setLoading(true);
+    try {
+      const url = path.startsWith('http') ? path : `${API_BASE}${path}`;
+      const res = await fetch(url, { headers: headers() });
+      if (!res.ok) {
+        const text = await res.text().catch(() => res.statusText);
+        throw new Error(`${res.status} ${res.statusText} - ${text}`);
+      }
+      return await res.json();
+    } finally { setLoading(false); }
+  }
+
+  async function apiPost(path, body = {}) {
+    setLoading(true);
+    try {
+      const url = path.startsWith('http') ? path : `${API_BASE}${path}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: headers(),
+        body: Object.keys(body).length ? JSON.stringify(body) : undefined,
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => res.statusText);
+        throw new Error(`${res.status} ${res.statusText} - ${text}`);
+      }
+      return await res.json().catch(() => ({}));
+    } finally { setLoading(false); }
+  }
+
+  /* Loaders */
+  async function loadSummary() {
+    try {
+      const data = await apiGet('/admin/summary');
+      setSummary(data);
+    } catch (err) {
+      setMessage({ type: 'error', text: `Summary error: ${err.message}` });
+    }
+  }
+
+  async function loadUsers() {
+    try {
+      const data = await apiGet('/admin/users');
+      setUsers(data || []);
+    } catch (err) {
+      setMessage({ type: 'error', text: `Users error: ${err.message}` });
+    }
+  }
+
+  async function loadTransactions() {
+    try {
+      const data = await apiGet('/admin/transactions');
+      setTransactions(data || []);
+    } catch (err) {
+      setMessage({ type: 'error', text: `Transactions error: ${err.message}` });
+    }
+  }
+
+  async function fetchUnpaidMatches() {
+    try {
+      const data = await apiGet('/matches?unpaid=true');
+      setUnpaidMatches(data || []);
+    } catch (err) {
+      setMessage({ type: 'error', text: `Unpaid matches error: ${err.message}` });
+    }
+  }
+
+  async function loadRecentMatches(limit = 10) {
+    try {
+      // server doesn't have a 'recent matches' endpoint; use /matches and limit on client
+      const all = await apiGet('/matches');
+      setRecentMatches((all || []).slice(0, limit));
+    } catch (err) {
+      setMessage({ type: 'error', text: `Recent matches error: ${err.message}` });
+    }
+  }
+
+  /* Actions */
+  async function runMatchmaking() {
+    try {
+      const resp = await apiPost('/admin/run-matchmaking');
+      setMessage({ type: 'info', text: `Matchmaking processed: ${Array.isArray(resp.processed) ? resp.processed.length : 0} matches` });
+      // refresh lists
+      await Promise.all([fetchUnpaidMatches(), loadRecentMatches(), loadSummary(), loadTransactions(), loadUsers()]);
+    } catch (err) {
+      setMessage({ type: 'error', text: `Matchmaking error: ${err.message}` });
+    }
+  }
+
+  async function payoutMatch(matchId) {
+    if (!confirm(`Payout match ${matchId}?`)) return;
+    try {
+      const resp = await apiPost(`/admin/payout/${matchId}`);
+      setMessage({ type: 'info', text: `Payout result: ${JSON.stringify(resp)}` });
+      // refresh
+      await Promise.all([fetchUnpaidMatches(), loadRecentMatches(), loadTransactions(), loadUsers(), loadSummary()]);
+    } catch (err) {
+      setMessage({ type: 'error', text: `Payout error: ${err.message}` });
+    }
+  }
+
+  async function runBatchPayout() {
+    if (!confirm('Run batch payout for unpaid matches?')) return;
+    try {
+      const resp = await apiPost('/admin/payout-unpaid');
+      setMessage({ type: 'info', text: `Batch payout result: ${JSON.stringify(resp)}` });
+      await Promise.all([fetchUnpaidMatches(), loadRecentMatches(), loadTransactions(), loadUsers(), loadSummary()]);
+    } catch (err) {
+      setMessage({ type: 'error', text: `Batch payout error: ${err.message}` });
+    }
+  }
+
+  /* Dev helper: set admin key */
+  function setKeyPrompt() {
+    const val = prompt('Paste admin key (will be saved to localStorage):', adminKey || '');
+    if (val) {
+      localStorage.setItem('battlehub_admin_key', val);
+      setAdminKey(val);
+      setMessage({ type: 'info', text: 'Admin key updated.' });
+    }
+  }
+
+  useEffect(() => {
+    (async () => {
+      await Promise.all([loadSummary(), loadUsers(), loadTransactions(), fetchUnpaidMatches(), loadRecentMatches()]);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* helpers for UI */
+  function badgeForState(state) {
+    return state === 'open' ? <span className="badge-open">open</span> : <span className="badge-closed">closed</span>;
+  }
+
+  function winnerName(match) {
+    try {
+      if (!match.winnerEntry || !match.entries) return 'n/a';
+      const entry = match.entries.find(e => e._id === match.winnerEntry);
+      return entry && entry.user ? entry.user.name : 'n/a';
+    } catch (e) {
+      return 'n/a';
+    }
+  }
+
+  return (
+    <div style={{ padding: 20, fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial' }}>
+      <h1 style={{ marginBottom: 6 }}>⚙️ BattleHub Admin Dashboard</h1>
+      <p style={{ marginTop: 0, color: '#555' }}>Quick admin overview: summary & stats</p>
+
+      <div style={{ marginBottom: 12 }}>
+        <button onClick={loadSummary} disabled={loading} style={{ marginRight: 8 }}>Load Summary</button>
+        <button onClick={loadUsers} disabled={loading} style={{ marginRight: 8 }}>Load Users</button>
+        <button onClick={loadTransactions} disabled={loading} style={{ marginRight: 8 }}>Load Transactions</button>
+        <button onClick={fetchUnpaidMatches} disabled={loading} style={{ marginRight: 8 }}>Fetch Unpaid Matches</button>
+        <button onClick={runMatchmaking} disabled={loading} style={{ marginRight: 8 }}>Run Matchmaking</button>
+        <button onClick={runBatchPayout} disabled={loading} style={{ marginRight: 8 }}>Batch Payout</button>
+        <button onClick={setKeyPrompt}>Set Admin Key</button>
+      </div>
+
+      {message && (
+        <div style={{ marginBottom: 12, color: message.type === 'error' ? 'crimson' : '#0b6' }}>
+          {message.text}
+        </div>
+      )}
+
+      <section style={{ marginBottom: 18 }}>
+        <h3>Summary</h3>
+        {summary ? <pre style={{ background: '#fff', padding: 8 }}>{JSON.stringify(summary, null, 2)}</pre> : <p>No summary loaded yet.</p>}
+      </section>
+
+      <section style={{ marginBottom: 18 }}>
+        <h3>Unpaid Matches</h3>
+        {unpaidMatches.length === 0 && <p>No unpaid matches</p>}
+        {unpaidMatches.map(m => (
+          <div key={m._id} style={{ padding: 8, border: '1px solid #eee', marginBottom: 6, background: '#fff' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+              <div>
+                <strong>{m._id}</strong> — <em>{m.battle?.title}</em> — Pot: ${m.potUSD ?? 'N/A'}
+                {' '}({badgeForState(m.battle?.state)})
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                Winner: {winnerName(m)}
+              </div>
+            </div>
+
+            <div style={{ marginTop: 6 }}>
+              <button onClick={() => payoutMatch(m._id)} disabled={loading} style={{ marginRight: 8 }}>Payout</button>
+              <button onClick={() => window.open(`${API_BASE}/matches/${m._id}`, '_blank')}>View JSON</button>
+            </div>
+          </div>
+        ))}
+      </section>
+
+      <section style={{ marginBottom: 18 }}>
+        <h3>Recent Matches</h3>
+        {recentMatches.length === 0 && <p>No matches</p>}
+        {recentMatches.map(m => (
+          <div key={m._id} style={{ padding: 8, border: '1px solid #eee', marginBottom: 6, background: '#fff' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <div>
+                <strong>{m._id}</strong> — <em>{m.battle?.title}</em>
+                {' '} {badgeForState(m.battle?.state)}
+                <div style={{ fontSize: 12, color: '#666' }}>Pot ${m.potUSD ?? 'N/A'} • Winner: {winnerName(m)}</div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                {m.paid ? <span>Paid</span> : <button onClick={() => payoutMatch(m._id)} disabled={loading}>Payout</button>}
+                <div style={{ marginTop: 6 }}>
+                  <button onClick={() => window.open(`${API_BASE}/matches/${m._id}`, '_blank')}>View JSON</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </section>
+
+      <section style={{ marginBottom: 18 }}>
+        <h3>Users</h3>
+        <pre style={{ maxHeight: 240, overflow: 'auto', background: '#fff', padding: 8 }}>{JSON.stringify(users, null, 2)}</pre>
+      </section>
+
+      <section style={{ marginBottom: 18 }}>
+        <h3>Transactions</h3>
+        <pre style={{ maxHeight: 240, overflow: 'auto', background: '#fff', padding: 8 }}>{JSON.stringify(transactions, null, 2)}</pre>
+      </section>
+    </div>
+  );
+}
+
