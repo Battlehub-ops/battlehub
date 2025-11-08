@@ -48,6 +48,26 @@ app.post('/admin/run-matchmaking', requireAdminKey, async (req, res) => {
   return res.json({ ok: true, message: 'Matchmaking triggered' });
 });
 
+// returns a minimal users list the admin UI expects
+app.get('/admin/users', requireAdminKey, async (req, res) => {
+  try {
+    // if you have a MongoDB connection and a users collection, return real data:
+    if (mongoClient && mongoClient.db) {
+      const db = mongoClient.db(); // default DB from the URI
+      const users = await db.collection('users')
+        .find({}, { projection: { password: 0 } })
+        .limit(100)
+        .toArray();
+      return res.json({ users });
+    }
+    // fallback: empty list so frontend doesn't 404
+    return res.json({ users: [] });
+  } catch (err) {
+    console.error('admin/users error:', err);
+    return res.status(500).json({ error: 'server_error' });
+  }
+});
+
 // public API example
 app.get('/api/stats', async (req, res) => {
   const stats = { totalUsers: 0, revenueUsd: 0, unpaidUsd: 0 };
