@@ -14,13 +14,8 @@ app.use(cors({
   allowedHeaders: ["Content-Type", "x-admin-key"]
 }));
 
-// allow CORS preflight on all routes
-app.options((req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-admin-key');
-  res.sendStatus(204);
-});
+// let the cors middleware handle preflight requests
+app.options('*', cors());
 
 const FRONTEND_URL = process.env.BASE_URL || 'https://battlehub-frontend.vercel.app';
 app.use(cors({ origin: [FRONTEND_URL] }));
