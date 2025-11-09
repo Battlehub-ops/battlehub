@@ -1,5 +1,7 @@
-// server/index.js
-/* Minimal BattleHub backend (safe defaults + CORS + admin stubs) */
+/**
+ * server/index.js
+ * Minimal BattleHub backend (safe defaults + CORS + admin stubs)
+ */
 
 const express = require('express');
 const cors = require('cors');
@@ -12,19 +14,21 @@ app.use(express.json());
 
 // ----- CORS (safe) -----
 // Use FRONTEND_URL if provided, otherwise allow all origins.
-// (Render/static hosting may require '*', but you can set FRONTEND_URL env to lock it down.)
+// (If you want stricter security, set FRONTEND_URL env to your frontend origin.)
 const FRONTEND_URL = process.env.FRONTEND_URL || process.env.BASE_URL || '';
 const corsOptions = {
   origin: FRONTEND_URL || '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'x-admin-key'],
-  // keep credentials off by default (avoid cookies unless you need them)
+  // credentials: false // keep cookies off unless you need them
 };
 app.use(cors(corsOptions));
-// let the cors middleware handle preflight for all routes
-app.options('*', cors(corsOptions));
 
-// ----- Config / env ----- 
+// Let the CORS middleware handle preflight for all routes
+// Use '/*' instead of '*' to avoid path-to-regexp errors
+app.options('/*', cors(corsOptions));
+
+// ----- Config / env -----
 const ADMIN_KEY = process.env.ADMIN_KEY || 'BattleHub2025Secret!';
 const PORT = Number(process.env.PORT || 4000);
 const MONGO_URI = process.env.MONGO_URI || process.env.MONGODB_URI || '';
@@ -64,7 +68,6 @@ app.get('/health', (req, res) => {
 // ----- admin endpoints (safe) -----
 // Trigger a process (placeholder)
 app.post('/admin/run-matchmaking', requireAdminKey, async (req, res) => {
-  // placeholder: run matchmaking logic here
   return res.json({ ok: true, message: 'Matchmaking triggered' });
 });
 
@@ -72,11 +75,10 @@ app.post('/admin/run-matchmaking', requireAdminKey, async (req, res) => {
 app.get('/admin/users', requireAdminKey, async (req, res) => {
   try {
     if (mongoClient && mongoClient.db) {
-      const db = mongoClient.db(); // default DB from the URI
+      const db = mongoClient.db();
       const users = await db.collection('users').find({}, { projection: { password: 0 } }).limit(100).toArray();
       return res.json({ users });
     }
-    // no DB -> return empty list
     return res.json({ users: [] });
   } catch (err) {
     console.error('Error fetching users:', err);
@@ -85,18 +87,15 @@ app.get('/admin/users', requireAdminKey, async (req, res) => {
 });
 
 app.get('/admin/matches', requireAdminKey, async (req, res) => {
-  // safe stub for admin UI
   return res.json([]);
 });
 
 app.get('/admin/unpaid-matches', requireAdminKey, async (req, res) => {
-  // safe stub for admin UI
   return res.json([]);
 });
 
-// ----- fallback for unknown admin endpoints (do not expose stack traces) -----
+// ----- fallback for unknown admin endpoints -----
 app.use('/admin/*', (req, res) => {
-  // return a friendly 404 for admin UI without leaking internal info
   return res.status(404).json({ error: 'not_found' });
 });
 
@@ -105,4 +104,3 @@ app.listen(PORT, () => {
   console.log(`BattleHub backend running on port ${PORT}`);
   console.log('Available at your primary URL (if hosted)');
 });
-
