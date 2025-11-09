@@ -1,4 +1,6 @@
-/* server/index.js */
+// server/index.js
+/* Minimal BattleHub backend (safe defaults + CORS + admin stubs) */
+
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -8,71 +10,73 @@ const app = express();
 app.use(helmet());
 app.use(express.json());
 
-// ======== CORS CONFIG ========
-const FRONTEND_URL =
-  process.env.BASE_URL ||
-  process.env.NEXT_PUBLIC_API_BASE ||
-  process.env.FRONTEND_URL ||
-  'https://client-3barral1r-battlehub-ops-projects.vercel.app';
+// ----- CORS (safe) -----
+// Use FRONTEND_URL if provided, otherwise allow all origins.
+// (Render/static hosting may require '*', but you can set FRONTEND_URL env to lock it down.)
+const FRONTEND_URL = process.env.FRONTEND_URL || process.env.BASE_URL || '';
+const corsOptions = {
+  origin: FRONTEND_URL || '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'x-admin-key'],
+  // keep credentials off by default (avoid cookies unless you need them)
+};
+app.use(cors(corsOptions));
+// let the cors middleware handle preflight for all routes
+app.options('*', cors(corsOptions));
 
-app.use(
-  cors({
-    origin: FRONTEND_URL,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'x-admin-key'],
-  })
-);
-
-// Let the CORS middleware handle preflight automatically
-app.options('*', cors());
-
-// ======== ENVIRONMENT CONFIG ========
+// ----- Config / env ----- 
 const ADMIN_KEY = process.env.ADMIN_KEY || 'BattleHub2025Secret!';
-const PORT = process.env.PORT || 4000;
-const MONGO_URI = process.env.MONGODB_URI || '';
-let mongoClient;
+const PORT = Number(process.env.PORT || 4000);
+const MONGO_URI = process.env.MONGO_URI || process.env.MONGODB_URI || '';
 
-// ======== MONGO CONNECTION ========
+// ----- Mongo (optional) -----
+let mongoClient = null;
 async function connectMongo() {
   if (!MONGO_URI) {
-    console.warn('⚠️ No Mongo URI provided — skipping MongoDB connection.');
+    console.warn('No MONGO_URI provided — skipping Mongo connection.');
     return;
   }
   try {
     mongoClient = new MongoClient(MONGO_URI, { useUnifiedTopology: true });
     await mongoClient.connect();
-    console.log('✅ Connected to MongoDB');
+    console.log('Connected to MongoDB');
   } catch (err) {
-    console.error('❌ MongoDB connection failed:', err);
+    console.error('Mongo connection error:', err);
+    mongoClient = null;
   }
 }
 connectMongo().catch(console.error);
 
-// ======== ADMIN AUTH MIDDLEWARE ========
+// ----- admin key middleware -----
 function requireAdminKey(req, res, next) {
   const key = req.header('x-admin-key');
-  if (!key || key !== ADMIN_KEY)
+  if (!key || key !== ADMIN_KEY) {
     return res.status(401).json({ error: 'Unauthorized' });
+  }
   next();
 }
 
-// ======== HEALTH CHECK ========
+// ----- health check -----
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime() });
 });
 
-// ======== ADMIN ENDPOINTS ========
+// ----- admin endpoints (safe) -----
+// Trigger a process (placeholder)
+app.post('/admin/run-matchmaking', requireAdminKey, async (req, res) => {
+  // placeholder: run matchmaking logic here
+  return res.json({ ok: true, message: 'Matchmaking triggered' });
+});
+
+// Safe read-only stubs used by admin UI (return empty arrays if DB missing)
 app.get('/admin/users', requireAdminKey, async (req, res) => {
   try {
     if (mongoClient && mongoClient.db) {
-      const db = mongoClient.db();
-      const users = await db
-        .collection('users')
-        .find({}, { projection: { password: 0 } })
-        .limit(100)
-        .toArray();
+      const db = mongoClient.db(); // default DB from the URI
+      const users = await db.collection('users').find({}, { projection: { password: 0 } }).limit(100).toArray();
       return res.json({ users });
     }
+    // no DB -> return empty list
     return res.json({ users: [] });
   } catch (err) {
     console.error('Error fetching users:', err);
@@ -81,41 +85,24 @@ app.get('/admin/users', requireAdminKey, async (req, res) => {
 });
 
 app.get('/admin/matches', requireAdminKey, async (req, res) => {
-  try {
-    if (mongoClient && mongoClient.db) {
-      const db = mongoClient.db();
-      const matches = await db.collection('matches').find({}).toArray();
-      return res.json({ matches });
-    }
-    return res.json({ matches: [] });
-  } catch (err) {
-    console.error('Error fetching matches:', err);
-    return res.status(500).json({ error: 'internal_error' });
-  }
+  // safe stub for admin UI
+  return res.json([]);
 });
 
 app.get('/admin/unpaid-matches', requireAdminKey, async (req, res) => {
-  try {
-    if (mongoClient && mongoClient.db) {
-      const db = mongoClient.db();
-      const unpaid = await db
-        .collection('matches')
-        .find({ paid: false })
-        .toArray();
-      return res.json({ unpaid });
-    }
-    return res.json({ unpaid: [] });
-  } catch (err) {
-    console.error('Error fetching unpaid matches:', err);
-    return res.status(500).json({ error: 'internal_error' });
-  }
+  // safe stub for admin UI
+  return res.json([]);
 });
 
-// ======== 404 HANDLER ========
-app.use((req, res) => res.status(404).json({ error: 'not_found' }));
+// ----- fallback for unknown admin endpoints (do not expose stack traces) -----
+app.use('/admin/*', (req, res) => {
+  // return a friendly 404 for admin UI without leaking internal info
+  return res.status(404).json({ error: 'not_found' });
+});
 
-// ======== START SERVER ========
+// ----- start server -----
 app.listen(PORT, () => {
-  console.log(`🚀 BattleHub backend running on port ${PORT}`);
+  console.log(`BattleHub backend running on port ${PORT}`);
+  console.log('Available at your primary URL (if hosted)');
 });
 
