@@ -1,6 +1,6 @@
 /**
  * server/index.js
- * Minimal BattleHub backend (safe defaults + CORS + admin stubs)
+ * Minimal BattleHub backend (safe defaults + automatic CORS + admin stubs)
  */
 
 const express = require('express');
@@ -12,21 +12,14 @@ const app = express();
 app.use(helmet());
 app.use(express.json());
 
-// ----- CORS (safe) -----
-// Use FRONTEND_URL if provided, otherwise allow all origins.
-// (If you want stricter security, set FRONTEND_URL env to your frontend origin.)
+// ----- CORS (safe & automatic) -----
 const FRONTEND_URL = process.env.FRONTEND_URL || process.env.BASE_URL || '';
 const corsOptions = {
   origin: FRONTEND_URL || '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'x-admin-key'],
-  // credentials: false // keep cookies off unless you need them
 };
-app.use(cors(corsOptions));
-
-// Let the CORS middleware handle preflight for all routes
-// Use '/*' instead of '*' to avoid path-to-regexp errors
-app.options('/*', cors(corsOptions));
+app.use(cors(corsOptions)); // this alone handles preflight automatically
 
 // ----- Config / env -----
 const ADMIN_KEY = process.env.ADMIN_KEY || 'BattleHub2025Secret!';
@@ -66,17 +59,18 @@ app.get('/health', (req, res) => {
 });
 
 // ----- admin endpoints (safe) -----
-// Trigger a process (placeholder)
 app.post('/admin/run-matchmaking', requireAdminKey, async (req, res) => {
   return res.json({ ok: true, message: 'Matchmaking triggered' });
 });
 
-// Safe read-only stubs used by admin UI (return empty arrays if DB missing)
 app.get('/admin/users', requireAdminKey, async (req, res) => {
   try {
     if (mongoClient && mongoClient.db) {
       const db = mongoClient.db();
-      const users = await db.collection('users').find({}, { projection: { password: 0 } }).limit(100).toArray();
+      const users = await db.collection('users')
+        .find({}, { projection: { password: 0 } })
+        .limit(100)
+        .toArray();
       return res.json({ users });
     }
     return res.json({ users: [] });
@@ -101,6 +95,5 @@ app.use('/admin/*', (req, res) => {
 
 // ----- start server -----
 app.listen(PORT, () => {
-  console.log(`BattleHub backend running on port ${PORT}`);
-  console.log('Available at your primary URL (if hosted)');
+  console.log(`✅ BattleHub backend running on port ${PORT}`);
 });
