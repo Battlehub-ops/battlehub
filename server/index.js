@@ -139,6 +139,71 @@ app.post('/admin/payout-unpaid', requireAdminKey, async (req, res) => {
   }
 });
 
+// ===== Admin Debug Endpoint =====
+// This route helps verify MongoDB connection and sample data.
+// Only accessible with the admin key for safety.
+
+app.get('/admin/db-info', requireAdminKey, async (req, res) => {
+  try {
+    if (!mongoClient) {
+      return res.status(503).json({
+        ok: false,
+        error: 'db_unavailable',
+        message: 'Mongo client not initialized'
+      });
+    }
+
+    // Ensure MongoDB is connected
+    try {
+      await mongoClient.db().command({ ping: 1 });
+    } catch (err) {
+      return res.status(503).json({
+        ok: false,
+        error: 'db_unavailable',
+        message: 'Mongo client not connected',
+        inner: err.message
+      });
+    }
+
+    const db = mongoClient.db(); // Default DB from URI
+    const usersCount = await db.collection('users').countDocuments();
+    const matchesCount = await db.collection('matches').countDocuments();
+
+    const sampleUsers = await db.collection('users')
+      .find({})
+      .project({ password: 0 })
+      .limit(5)
+      .toArray();
+
+    const sampleMatches = await db.collection('matches')
+      .find({})
+      .limit(5)
+      .toArray();
+
+    return res.json({
+      ok: true,
+      usersCount,
+      matchesCount,
+      sampleUsers,
+      sampleMatches: sampleMatches.map(m => ({
+        _id: m._id,
+        title: m.title || '—',
+        winnerName: m.winnerName || m.winner || '—',
+        paid: !!m.paid,
+        testTag: m.testTag || '—'
+      }))
+    });
+
+  } catch (err) {
+    console.error('Error in /admin/db-info', err);
+    return res.status(500).json({
+      ok: false,
+      error: 'internal_error',
+      message: err.message || String(err)
+    });
+  }
+});
+
 // ===== SAFE FALLBACK =====
 // Use a simple startsWith check rather than a pattern that could be parsed by path-to-regexp.
 app.use((req, res) => {
