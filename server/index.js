@@ -19,7 +19,7 @@ const corsOptions = {
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'x-admin-key'],
 };
-app.use(cors(corsOptions)); // this alone handles preflight automatically
+app.use(cors(corsOptions)); // CORS automatically handles preflight
 
 // ----- Config / env -----
 const ADMIN_KEY = process.env.ADMIN_KEY || 'BattleHub2025Secret!';
@@ -89,7 +89,7 @@ app.get('/admin/unpaid-matches', requireAdminKey, async (req, res) => {
 });
 
 // ----- fallback for unknown admin endpoints -----
-app.use('/admin/*', (req, res) => {
+app.use(/^\/admin(\/.*)?$/, (req, res) => {
   return res.status(404).json({ error: 'not_found' });
 });
 
