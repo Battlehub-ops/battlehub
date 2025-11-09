@@ -1,6 +1,6 @@
 /**
  * server/index.js
- * Clean + Render-safe BattleHub backend (Express 4/5 compatible)
+ * Clean + Render-safe BattleHub backend (avoids '*' route strings)
  */
 
 const express = require('express');
@@ -21,28 +21,29 @@ const PORT = Number(process.env.PORT || 4000);
 const MONGO_URI = process.env.MONGO_URI || process.env.MONGODB_URI || '';
 
 // ===== CORS =====
+// Use a concrete path for origins (FRONTEND_URL) when available; otherwise allow all.
 const corsOptions = {
   origin: FRONTEND_URL || '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'x-admin-key'],
   optionsSuccessStatus: 204,
 };
+// Apply CORS middleware globally. Do NOT register app.options('*', ...) to avoid path-to-regexp issues.
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
 
-// ===== MONGO (Optional) =====
+// ===== MONGO (optional) =====
 let mongoClient = null;
 async function connectMongo() {
   if (!MONGO_URI) {
-    console.warn('⚠️  No MONGO_URI provided — skipping DB connection.');
+    console.warn('No MONGO_URI provided — skipping Mongo connection.');
     return;
   }
   try {
     mongoClient = new MongoClient(MONGO_URI, { useUnifiedTopology: true });
     await mongoClient.connect();
-    console.log('✅ Connected to MongoDB');
+    console.log('Connected to MongoDB');
   } catch (err) {
-    console.error('❌ Mongo connection error:', err.message);
+    console.error('Mongo connection error:', err && err.message ? err.message : err);
     mongoClient = null;
   }
 }
@@ -63,31 +64,24 @@ app.get('/health', (req, res) => {
 });
 
 // ===== ADMIN ENDPOINTS =====
-
-// Matchmaking trigger stub
 app.post('/admin/run-matchmaking', requireAdminKey, async (req, res) => {
   return res.json({ ok: true, message: 'Matchmaking triggered (stub)' });
 });
 
-// Users
 app.get('/admin/users', requireAdminKey, async (req, res) => {
   try {
     if (mongoClient && mongoClient.db) {
       const db = mongoClient.db();
-      const users = await db.collection('users')
-        .find({}, { projection: { password: 0 } })
-        .limit(200)
-        .toArray();
+      const users = await db.collection('users').find({}, { projection: { password: 0 } }).limit(200).toArray();
       return res.json(users);
     }
     return res.json([]);
   } catch (err) {
     console.error('Error /admin/users:', err);
-    res.status(500).json({ error: 'internal_error' });
+    return res.status(500).json({ error: 'internal_error' });
   }
 });
 
-// Matches
 app.get('/admin/matches', requireAdminKey, async (req, res) => {
   try {
     if (mongoClient && mongoClient.db) {
@@ -95,14 +89,13 @@ app.get('/admin/matches', requireAdminKey, async (req, res) => {
       const matches = await db.collection('matches').find({}).limit(200).toArray();
       return res.json(matches);
     }
-    return res.json([]); // placeholder
+    return res.json([]);
   } catch (err) {
     console.error('Error /admin/matches:', err);
-    res.status(500).json({ error: 'internal_error' });
+    return res.status(500).json({ error: 'internal_error' });
   }
 });
 
-// Unpaid matches
 app.get('/admin/unpaid-matches', requireAdminKey, async (req, res) => {
   try {
     if (mongoClient && mongoClient.db) {
@@ -113,11 +106,10 @@ app.get('/admin/unpaid-matches', requireAdminKey, async (req, res) => {
     return res.json([]);
   } catch (err) {
     console.error('Error /admin/unpaid-matches:', err);
-    res.status(500).json({ error: 'internal_error' });
+    return res.status(500).json({ error: 'internal_error' });
   }
 });
 
-// Payout unpaid matches
 app.post('/admin/payout-unpaid', requireAdminKey, async (req, res) => {
   try {
     if (!(mongoClient && mongoClient.db)) {
@@ -133,30 +125,30 @@ app.post('/admin/payout-unpaid', requireAdminKey, async (req, res) => {
     const ids = unpaid.map((m) => m._id);
     await matchesCol.updateMany({ _id: { $in: ids } }, { $set: { paid: true, paidAt: new Date() } });
 
-    // Log the payout
     const dateStr = new Date().toISOString().slice(0, 10);
     const logDir = path.join(__dirname, 'logs');
     if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
     const logFile = path.join(logDir, `payout-${dateStr}.log`);
-    const line = `${new Date().toISOString()} | payouts=${unpaid.length} | ids=${ids.map(id => String(id)).join(',')}\n`;
+    const line = `${new Date().toISOString()} | payouts=${unpaid.length} | ids=${ids.map((id) => String(id)).join(',')}\n`;
     fs.appendFileSync(logFile, line, 'utf8');
 
-    res.json({ paid: unpaid.length, ids });
+    return res.json({ paid: unpaid.length, ids });
   } catch (err) {
     console.error('Error /admin/payout-unpaid:', err);
-    res.status(500).json({ error: 'internal_error' });
+    return res.status(500).json({ error: 'internal_error' });
   }
 });
 
 // ===== SAFE FALLBACK =====
+// Use a simple startsWith check rather than a pattern that could be parsed by path-to-regexp.
 app.use((req, res) => {
   if (req.path.startsWith('/admin/')) {
     return res.status(404).json({ error: 'not_found' });
   }
-  res.status(404).send('Not Found');
+  return res.status(404).send('Not Found');
 });
 
 // ===== START SERVER =====
 app.listen(PORT, () => {
-  console.log(`🚀 BattleHub backend running on port ${PORT}`);
+  console.log(`BattleHub backend running on port ${PORT}`);
 });
