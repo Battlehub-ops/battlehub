@@ -15,7 +15,7 @@ app.use(cors({
 }));
 
 // let the cors middleware handle preflight requests
-app.options('*', cors());
+app.options('/*', cors());
 
 const FRONTEND_URL = process.env.BASE_URL || 'https://battlehub-frontend.vercel.app';
 app.use(cors({ origin: [FRONTEND_URL] }));
