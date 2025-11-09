@@ -80,14 +80,6 @@ app.get('/admin/users', requireAdminKey, async (req, res) => {
   }
 });
 
-app.get('/admin/matches', requireAdminKey, async (req, res) => {
-  return res.json([]);
-});
-
-app.get('/admin/unpaid-matches', requireAdminKey, async (req, res) => {
-  return res.json([]);
-});
-
 // POST /admin/payout-unpaid
 // - safe: finds matches with { paid: false } and marks them paid
 // - logs a summary line to logs/payout-YYYYMMDD.log
