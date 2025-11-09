@@ -77,6 +77,15 @@ app.get('/admin/users', requireAdminKey, async (req, res) => {
   } catch (err) {
     console.error('Error fetching users:', err);
     return res.status(500).json({ error: 'internal_error' });
+
+// safe stubs for admin UI (keep simple placeholders)
+app.get('/admin/matches', requireAdminKey, async (req, res) => {
+  return res.json([]); // empty placeholder until real DB logic added
+});
+
+app.get('/admin/unpaid-matches', requireAdminKey, async (req, res) => {
+  return res.json([]); // placeholder
+});
   }
 });
 
