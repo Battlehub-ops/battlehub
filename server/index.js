@@ -10,9 +10,13 @@ app.use(express.json());
 
 // Basic CORS config: allow your frontend or fallback to allow any origin
 const FRONTEND_URL = process.env.BASE_URL || process.env.NEXT_PUBLIC_API_BASE || process.env.FRONTEND_URL || 'https://client-3barral1r-battlehub-ops-projects.vercel.app';
-app.use(cors({ origin: FRONTEND_URL === 'ALLOW_ALL' ? '*' : FRONTEND_URL }));
-// Let the cors middleware handle preflight for all routes
-app.options('*', cors());
+app.use(
+  cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'x-admin-key'],
+  })
+);
 
 // Admin key and other envs
 const ADMIN_KEY = process.env.ADMIN_KEY || 'BattleHub2025Secret!';
