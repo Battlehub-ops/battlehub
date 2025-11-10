@@ -12,14 +12,29 @@ const app = express();
 app.use(helmet());
 app.use(express.json());
 
-// ----- CORS (safe & automatic) -----
-const FRONTEND_URL = process.env.FRONTEND_URL || process.env.NEXT_PUBLIC_API_BASE || process.env.BASE_URL || '';
-const corsOptions = {
-  origin: FRONTEND_URL || '*',
+// -------------------- CORS (Cross-Origin Resource Sharing) --------------------
+const cors = require('cors'); // keep this only once at top if already present
+
+const ALLOWED_ORIGINS = [
+  'http://localhost:3000',                 // Local frontend
+  'http://localhost:3001',                 // Optional local test port
+  'https://battlehub-frontend.vercel.app', // Main deployed frontend
+  'https://battlehub-frontend-git-main-battlehub-ops-projects.vercel.app' // Optional preview deployment
+];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true); // allow curl or internal calls
+    if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+    return callback(new Error('CORS origin not allowed: ' + origin), false);
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'x-admin-key'],
-};
-app.use(cors(corsOptions));
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-key', 'X-Requested-With'],
+  credentials: true
+}));
+
+// Handle preflight (OPTIONS) requests globally
+app.options('*', cors());
 
 // ----- Config / env -----
 const ADMIN_KEY = process.env.ADMIN_KEY || 'BattleHub2025Secret!';
