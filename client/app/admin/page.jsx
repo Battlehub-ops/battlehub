@@ -195,35 +195,49 @@ export default function AdminPage() {
       <section className="section" style={{ marginTop: 28 }}>
         <h2>Recent Matches</h2>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-          {matches.map((m) => (
-            <div key={m._id} style={{ padding: 18, background: '#fff', boxShadow: '0 6px 18px rgba(17,24,39,0.04)', borderRadius: 10, display: 'flex', gap: 20, alignItems: 'flex-start', justifyContent: 'space-between' }}>
-              <div style={{ flex: 1 }}>
-                <h3 style={{ margin: 0 }}>{m.battle?.title || 'Untitled'} <small style={{ marginLeft: 8, color: '#6b7280' }}>{m.battle?.sport}</small></h3>
-                <div style={{ marginTop: 8, color: '#6b7280' }}>Pot: {fmt(m.potUSD)} • Created: {new Date(m.createdAt).toLocaleString()}</div>
 
-                <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
-                  <div>
-                    <div style={{ color: '#6b7280' }}>Winner</div>
-                    <div style={{ fontWeight: 700 }}>{winnerName(m)}</div>
-                  </div>
-                  <div>
-                    <div style={{ color: '#6b7280' }}>Winner Payout</div>
-                    <div style={{ fontWeight: 700 }}>{fmt(m.winnerPayoutUSD)}</div>
-                  </div>
-                  <div>
-                    <div style={{ color: '#6b7280' }}>Platform Cut</div>
-                    <div style={{ fontWeight: 700 }}>{fmt(m.platformCutUSD)}</div>
-                  </div>
-                </div>
-              </div>
+{Array.isArray(matches) && matches.map((m) => {
+  const title = m?.title || m?.battle?.title || 'Untitled';
+  const sport = m?.battle?.sport || '';
+  const pot = (typeof m?.potUSD === 'number') ? m.potUSD : (m?.prize ?? 0);
+  const created = m?.createdAt ? new Date(m.createdAt).toLocaleString() : '';
+  const winnerDisplay = m?.winnerName || 'N/A';
+  const winnerPayout = (typeof m?.winnerPayoutUSD === 'number') ? m.winnerPayoutUSD : (m?.winnerPayout || 0);
+  const platformCut = (typeof m?.platformCutUSD === 'number') ? m.platformCutUSD : (m?.platformCut || 0);
 
-              <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                <button onClick={() => postAction(`/admin/matches/${m._id}/run-matchmaking`)} style={{ padding: '8px 12px', borderRadius: 6 }}>Run Matchmaking</button>
-                <button disabled style={{ padding: '8px 12px', borderRadius: 6, opacity: 0.6 }}>Paid</button>
-                <button onClick={() => { navigator.clipboard?.writeText(JSON.stringify(m, null, 2)); alert('JSON copied to clipboard'); }} style={{ padding: '8px 12px', borderRadius: 6 }}>View JSON</button>
-              </div>
-            </div>
-          ))}
+  return (
+    <div key={m._id} style={{ padding: 18, background: '#fff', boxShadow: '0 6px 18px rgba(17,24,39,0.04)', borderRadius: 10, display: 'flex', gap: 20, alignItems: 'flex-start', justifyContent: 'space-between' }}>
+      <div style={{ flex: 1 }}>
+        <h3 style={{ margin: 0 }}>{title} <small style={{ marginLeft: 8, color: '#6b7280' }}>{sport}</small></h3>
+        <div style={{ marginTop: 8, color: '#6b7280' }}>Pot: {fmt(pot)} • Created: {created}</div>
+
+        <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+          <div>
+            <div style={{ color: '#6b7280' }}>Winner</div>
+            <div style={{ fontWeight: 700 }}>{winnerDisplay}</div>
+          </div>
+
+          <div>
+            <div style={{ color: '#6b7280' }}>Winner Payout</div>
+            <div style={{ fontWeight: 700 }}>{fmt(winnerPayout)}</div>
+          </div>
+
+          <div>
+            <div style={{ color: '#6b7280' }}>Platform Cut</div>
+            <div style={{ fontWeight: 700 }}>{fmt(platformCut)}</div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+        <button onClick={() => postAction(`/admin/matches/${m._id}/run-matchmaking`)} style={{ padding: '8px 12px', borderRadius: 6 }}>Run Matchmaking</button>
+        <button disabled style={{ padding: '8px 12px', borderRadius: 6, opacity: 0.6 }}>Paid</button>
+        <button onClick={() => { navigator.clipboard?.writeText(JSON.stringify(m, null, 2)); alert('JSON copied to clipboard'); }} style={{ padding: '8px 12px', borderRadius: 6 }}>View JSON</button>
+      </div>
+    </div>
+  );
+})}
+
         </div>
       </section>
 
