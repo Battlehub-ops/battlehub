@@ -1,55 +1,72 @@
 /**
  * server/index.js
- * Clean + Render-safe BattleHub backend (avoids '*' route strings)
+ * BattleHub minimal backend — Render-friendly + robust Mongo connect + admin stubs
  */
 
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const { MongoClient } = require('mongodb');
-const fs = require('fs');
-const path = require('path');
 
 const app = express();
 app.use(helmet());
 app.use(express.json());
 
-// ===== CONFIG =====
-const FRONTEND_URL = process.env.FRONTEND_URL || process.env.BASE_URL || '';
-const ADMIN_KEY = process.env.ADMIN_KEY || 'BattleHub2025Secret!';
-const PORT = Number(process.env.PORT || 4000);
-const MONGO_URI = process.env.MONGO_URI || process.env.MONGODB_URI || '';
-
-// ===== CORS =====
-// Use a concrete path for origins (FRONTEND_URL) when available; otherwise allow all.
+// ----- CORS (safe & automatic) -----
+const FRONTEND_URL = process.env.FRONTEND_URL || process.env.NEXT_PUBLIC_API_BASE || process.env.BASE_URL || '';
 const corsOptions = {
   origin: FRONTEND_URL || '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'x-admin-key'],
-  optionsSuccessStatus: 204,
 };
-// Apply CORS middleware globally. Do NOT register app.options('*', ...) to avoid path-to-regexp issues.
 app.use(cors(corsOptions));
 
-// ===== MONGO (optional) =====
+// ----- Config / env -----
+const ADMIN_KEY = process.env.ADMIN_KEY || 'BattleHub2025Secret!';
+const PORT = Number(process.env.PORT || 4000);
+const MONGO_URI = process.env.MONGO_URI || process.env.MONGODB_URI || '';
+
+// ----- Mongo (optional) -----
 let mongoClient = null;
-async function connectMongo() {
+let mongoConnected = false;
+
+async function connectMongo(retries = 5, delayMs = 2000) {
   if (!MONGO_URI) {
     console.warn('No MONGO_URI provided — skipping Mongo connection.');
     return;
   }
-  try {
-    mongoClient = new MongoClient(MONGO_URI, { useUnifiedTopology: true });
-    await mongoClient.connect();
-    console.log('Connected to MongoDB');
-  } catch (err) {
-    console.error('Mongo connection error:', err && err.message ? err.message : err);
-    mongoClient = null;
+
+  // try several times with small delays (useful for platform start-up races)
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      mongoClient = new MongoClient(MONGO_URI, {}); // modern driver, no legacy options
+      await mongoClient.connect();
+      mongoConnected = true;
+      console.log('✅ Connected to MongoDB');
+      return;
+    } catch (err) {
+      console.error(`Mongo connect attempt ${attempt} failed:`, err.message || err);
+      mongoClient = null;
+      mongoConnected = false;
+      if (attempt < retries) {
+        console.log(`Retrying Mongo connection in ${delayMs}ms...`);
+        await new Promise(r => setTimeout(r, delayMs));
+      }
+    }
+  }
+
+  // after retries
+  if (!mongoConnected) {
+    console.error('⚠️ Unable to connect to MongoDB after retries. DB features will be disabled until connection succeeds.');
   }
 }
-connectMongo().catch(console.error);
 
-// ===== ADMIN KEY CHECK =====
+// Start trying to connect immediately (background)
+connectMongo().catch(err => {
+  console.error('Unexpected error in connectMongo():', err);
+});
+
+// ----- admin key middleware -----
 function requireAdminKey(req, res, next) {
   const key = req.header('x-admin-key');
   if (!key || key !== ADMIN_KEY) {
@@ -58,162 +75,128 @@ function requireAdminKey(req, res, next) {
   next();
 }
 
-// ===== HEALTH CHECK =====
+// ----- health check -----
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime() });
 });
 
-// ===== ADMIN ENDPOINTS =====
+// ----- admin endpoints (safe) -----
 app.post('/admin/run-matchmaking', requireAdminKey, async (req, res) => {
   return res.json({ ok: true, message: 'Matchmaking triggered (stub)' });
 });
 
 app.get('/admin/users', requireAdminKey, async (req, res) => {
   try {
-    if (mongoClient && mongoClient.db) {
+    if (mongoClient && mongoConnected) {
       const db = mongoClient.db();
-      const users = await db.collection('users').find({}, { projection: { password: 0 } }).limit(200).toArray();
-      return res.json(users);
+      const users = await db.collection('users')
+        .find({}, { projection: { password: 0 } })
+        .limit(100)
+        .toArray();
+      return res.json({ users });
     }
-    return res.json([]);
+    return res.json({ users: [] });
   } catch (err) {
-    console.error('Error /admin/users:', err);
+    console.error('Error fetching users:', err);
     return res.status(500).json({ error: 'internal_error' });
   }
 });
 
 app.get('/admin/matches', requireAdminKey, async (req, res) => {
   try {
-    if (mongoClient && mongoClient.db) {
+    if (mongoClient && mongoConnected) {
       const db = mongoClient.db();
       const matches = await db.collection('matches').find({}).limit(200).toArray();
       return res.json(matches);
     }
     return res.json([]);
   } catch (err) {
-    console.error('Error /admin/matches:', err);
+    console.error('Error fetching matches:', err);
     return res.status(500).json({ error: 'internal_error' });
   }
 });
 
 app.get('/admin/unpaid-matches', requireAdminKey, async (req, res) => {
   try {
-    if (mongoClient && mongoClient.db) {
+    if (mongoClient && mongoConnected) {
       const db = mongoClient.db();
-      const unpaid = await db.collection('matches').find({ paid: false }).limit(200).toArray();
+      const unpaid = await db.collection('matches').find({ paid: false }).limit(100).toArray();
       return res.json(unpaid);
     }
     return res.json([]);
   } catch (err) {
-    console.error('Error /admin/unpaid-matches:', err);
+    console.error('Error fetching unpaid matches:', err);
     return res.status(500).json({ error: 'internal_error' });
   }
 });
 
+// POST /admin/payout-unpaid (keeps safe behaviour)
 app.post('/admin/payout-unpaid', requireAdminKey, async (req, res) => {
   try {
-    if (!(mongoClient && mongoClient.db)) {
+    if (!(mongoClient && mongoConnected)) {
       return res.status(503).json({ error: 'db_unavailable', message: 'Mongo not connected' });
     }
-
     const db = mongoClient.db();
     const matchesCol = db.collection('matches');
     const unpaid = await matchesCol.find({ paid: false }).limit(100).toArray();
+    if (!unpaid || unpaid.length === 0) return res.json({ paid: [], count: 0 });
 
-    if (!unpaid.length) return res.json({ paid: [], count: 0 });
-
-    const ids = unpaid.map((m) => m._id);
+    const ids = unpaid.map(m => m._id);
     await matchesCol.updateMany({ _id: { $in: ids } }, { $set: { paid: true, paidAt: new Date() } });
 
-    const dateStr = new Date().toISOString().slice(0, 10);
+    // audit line
+    const fs = require('fs');
+    const path = require('path');
+    const d = new Date();
+    const dateStr = d.toISOString().slice(0,10);
     const logDir = path.join(__dirname, 'logs');
     if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
     const logFile = path.join(logDir, `payout-${dateStr}.log`);
-    const line = `${new Date().toISOString()} | payouts=${unpaid.length} | ids=${ids.map((id) => String(id)).join(',')}\n`;
-    fs.appendFileSync(logFile, line, 'utf8');
+    const line = `${new Date().toISOString()} | admin=${req.header('x-admin-key') ? 'present' : 'missing'} | payouts=${unpaid.length} | ids=${ids.map(id=>String(id)).join(',')}\n`;
+    fs.appendFileSync(logFile, line, { encoding: 'utf8' });
 
-    return res.json({ paid: unpaid.length, ids });
+    return res.json({ paid: unpaid.length, ids: ids });
   } catch (err) {
-    console.error('Error /admin/payout-unpaid:', err);
+    console.error('Error in /admin/payout-unpaid:', err);
     return res.status(500).json({ error: 'internal_error' });
   }
 });
 
-// ===== Admin Debug Endpoint =====
-// This route helps verify MongoDB connection and sample data.
-// Only accessible with the admin key for safety.
-
+// ----- debug endpoint to inspect DB state -----
 app.get('/admin/db-info', requireAdminKey, async (req, res) => {
   try {
-    if (!mongoClient) {
-      return res.status(503).json({
-        ok: false,
-        error: 'db_unavailable',
-        message: 'Mongo client not initialized'
-      });
+    if (!(mongoClient && mongoConnected)) {
+      return res.json({ ok: false, error: 'db_unavailable', message: mongoClient ? 'Mongo client not initialized' : 'Mongo not configured' });
     }
-
-    // Ensure MongoDB is connected
-    try {
-      await mongoClient.db().command({ ping: 1 });
-    } catch (err) {
-      return res.status(503).json({
-        ok: false,
-        error: 'db_unavailable',
-        message: 'Mongo client not connected',
-        inner: err.message
-      });
-    }
-
-    const db = mongoClient.db(); // Default DB from URI
+    const db = mongoClient.db();
     const usersCount = await db.collection('users').countDocuments();
     const matchesCount = await db.collection('matches').countDocuments();
-
-    const sampleUsers = await db.collection('users')
-      .find({})
-      .project({ password: 0 })
-      .limit(5)
-      .toArray();
-
-    const sampleMatches = await db.collection('matches')
-      .find({})
-      .limit(5)
-      .toArray();
+    const sampleUsers = await db.collection('users').find({}).limit(4).toArray();
+    const sampleMatches = await db.collection('matches').find({}).limit(6).toArray();
 
     return res.json({
       ok: true,
       usersCount,
       matchesCount,
-      sampleUsers,
-      sampleMatches: sampleMatches.map(m => ({
-        _id: m._id,
-        title: m.title || '—',
-        winnerName: m.winnerName || m.winner || '—',
-        paid: !!m.paid,
-        testTag: m.testTag || '—'
-      }))
+      sampleUsers: sampleUsers.map(u => ({ _id: u._id, name: u.name, email: u.email, testTag: u.testTag || null })),
+      sampleMatches: sampleMatches.map(m => ({ _id: m._id, title: m.title || null, winnerName: m.winnerName || null, paid: !!m.paid, testTag: m.testTag || null })),
     });
-
   } catch (err) {
-    console.error('Error in /admin/db-info', err);
-    return res.status(500).json({
-      ok: false,
-      error: 'internal_error',
-      message: err.message || String(err)
-    });
+    console.error('Error in /admin/db-info:', err);
+    return res.status(500).json({ ok: false, error: 'internal_error' });
   }
 });
 
-// ===== SAFE FALLBACK =====
-// Use a simple startsWith check rather than a pattern that could be parsed by path-to-regexp.
-app.use((req, res) => {
-  if (req.path.startsWith('/admin/')) {
+// ----- SAFE fallback (avoid path-to-regexp issues) -----
+app.use((req, res, next) => {
+  if (req.path && req.path.startsWith('/admin/')) {
     return res.status(404).json({ error: 'not_found' });
   }
-  return res.status(404).send('Not Found');
+  return next();
 });
 
-// ===== START SERVER =====
+// ----- start server -----
 app.listen(PORT, () => {
-  console.log(`BattleHub backend running on port ${PORT}`);
+  console.log(`✅ BattleHub backend running on port ${PORT}`);
 });
+
