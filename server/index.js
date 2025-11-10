@@ -4,16 +4,16 @@
  */
 
 const express = require('express');
-const cors = require('cors');
 const helmet = require('helmet');
 const { MongoClient } = require('mongodb');
+const cors = require('cors');
 
 const app = express();
 app.use(helmet());
 app.use(express.json());
 
 // -------------------- CORS (Cross-Origin Resource Sharing) --------------------
-const cors = require('cors'); // keep this only once at top if already present
+
 
 const ALLOWED_ORIGINS = [
   'http://localhost:3000',                 // Local frontend
@@ -22,23 +22,31 @@ const ALLOWED_ORIGINS = [
   'https://battlehub-frontend-git-main-battlehub-ops-projects.vercel.app' // Optional preview deployment
 ];
 
-app.use(cors({
+// Dynamic CORS: allow local dev + production frontend(s)
+
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'https://battlehub-frontend.vercel.app,http://localhost:3000')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+
+const corsOptions = {
   origin: function (origin, callback) {
-    if (!origin) return callback(null, true); // allow curl or internal calls
-    if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
-    return callback(new Error('CORS origin not allowed: ' + origin), false);
+    if (!origin) return callback(null, true); // allow curl / internal
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    console.warn('❌ Blocked CORS origin:', origin);
+    return callback(new Error('Not allowed by CORS'));
   },
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-key', 'X-Requested-With'],
-  credentials: true
-}));
+  credentials: true,
+  optionsSuccessStatus: 200,
+};
+
+app.use(cors(corsOptions));
+
 
 // Handle preflight (OPTIONS) requests globally
-app.options('*', cors());
 
 // ----- Config / env -----
 const ADMIN_KEY = process.env.ADMIN_KEY || 'BattleHub2025Secret!';
-const PORT = Number(process.env.PORT || 4000);
 const MONGO_URI = process.env.MONGO_URI || process.env.MONGODB_URI || '';
 
 // ----- Mongo (optional) -----
@@ -202,6 +210,8 @@ app.get('/admin/db-info', requireAdminKey, async (req, res) => {
   }
 });
 
+app.use('/admin/games', require('./routes/games'));
+
 // ----- SAFE fallback (avoid path-to-regexp issues) -----
 app.use((req, res, next) => {
   if (req.path && req.path.startsWith('/admin/')) {
@@ -210,8 +220,42 @@ app.use((req, res, next) => {
   return next();
 });
 
-// ----- start server -----
-app.listen(PORT, () => {
-  console.log(`✅ BattleHub backend running on port ${PORT}`);
-});
+// ------ Mongo + Server Startup (replaces old app.listen block) ------
+const mongoose = require('mongoose');
+
+
+const PORT = process.env.PORT || 4000;
+
+async function startServer() {
+  try {
+    console.log('Attempting to connect to Mongo:', MONGO_URI);
+
+    await mongoose.connect(MONGO_URI, {
+      serverSelectionTimeoutMS: 10000,
+      connectTimeoutMS: 10000,
+    });
+
+    console.log('✅ Connected to MongoDB');
+
+    mongoose.connection.on('error', (err) => {
+      console.error('Mongo connection error:', err);
+    });
+    mongoose.connection.on('disconnected', () => {
+      console.warn('Mongo disconnected');
+    });
+    mongoose.connection.on('reconnected', () => {
+      console.log('Mongo reconnected');
+    });
+
+    app.listen(PORT, () => {
+      console.log(`✅ BattleHub backend running on port ${PORT}`);
+    });
+  } catch (err) {
+    console.error('❌ Failed to connect to Mongo. Exiting.');
+    console.error(err);
+    process.exit(1);
+  }
+}
+
+startServer();
 
