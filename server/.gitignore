@@ -1,1 +1,3 @@
 logs/*.log
+index.js.bak*
+index.js.save*
