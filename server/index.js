@@ -116,7 +116,7 @@ app.get('/admin/users', requireAdminKey, async (req, res) => {
         .find({}, { projection: { password: 0 } })
         .limit(100)
         .toArray();
-      return res.json({ users });
+      return res.json(users);
     }
     return res.json({ users: [] });
   } catch (err) {
