@@ -9,6 +9,10 @@ const { MongoClient } = require('mongodb');
 const cors = require('cors');
 
 const app = express();
+app.use((req, res, next) => {
+  console.log('🔥 TOP-LEVEL REQUEST:', req.method, req.url);
+  next();
+});
 app.use(helmet());
 app.use(express.json());
 
@@ -210,7 +214,17 @@ app.get('/admin/db-info', requireAdminKey, async (req, res) => {
   }
 });
 
+// ---- DEBUG: log every incoming request (temporary) ----
+app.use((req, res, next) => {
+  console.log('👉 REQ', new Date().toISOString(), req.method, req.path, 'content-length=', req.header('content-length') || 0, 'x-admin-key=', req.header('x-admin-key') ? '[present]' : '[missing]');
+  // don't print full headers or body (to avoid secrets)
+  next();
+});
+// ---- end debug middleware ----
+
 app.use('/admin/games', require('./routes/games'));
+
+app.use('/admin/pesapal', require('./routes/pesapal'));
 
 // ----- SAFE fallback (avoid path-to-regexp issues) -----
 app.use((req, res, next) => {
