@@ -22,7 +22,7 @@ function paymentsDisabled(req, res) {
 
 if (isDisabled) {
   // All endpoints just return disabled
-  router.all('*', paymentsDisabled);
+  router.use( paymentsDisabled);
   module.exports = router;
   return;
 }
@@ -33,7 +33,7 @@ try {
   pesapal = require('pesapaljs-v3').init; // library exposes init function
 } catch (err) {
   console.warn('[pesapal] pesapaljs-v3 not available, payments disabled:', err && err.message);
-  router.all('*', paymentsDisabled);
+  router.use( paymentsDisabled);
   module.exports = router;
   return;
 }
