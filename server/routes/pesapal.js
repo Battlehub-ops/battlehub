@@ -1,83 +1,63 @@
+/**
+ * Safe pesapal route stub.
+ * - If PESAPAL_DISABLED === 'true' this returns 503 for all pesapal endpoints.
+ * - Else tries to require pesapaljs-v3 inside try/catch and only uses it when available.
+ *
+ * When ready to restore full payments, replace this file with the original
+ * implementation or remove the PESAPAL_DISABLED env var.
+ */
+
 const express = require('express');
 const router = express.Router();
-const pesapalInit = require('pesapaljs-v3').init;   // correct import for v3
 
-// Create Order (PESAPAL v3)
-router.post('/create-order', async (req, res) => {
-  try {
-    const { amount, reference, description } = req.body;
+const isDisabled = (process.env.PESAPAL_DISABLED || '').toLowerCase() === 'true';
 
-    if (!amount || !reference) {
-      return res.status(400).json({ ok: false, error: "Missing amount or reference" });
-    }
-
-    const pesapal = pesapalInit({
-      consumer_key: process.env.PESAPAL_CONSUMER_KEY,
-      consumer_secret: process.env.PESAPAL_CONSUMER_SECRET,
-      is_live: false, // sandbox mode for now
-    });
-
-    // Step 1: Get access token
-    console.log("[pesapal] calling getToken() (wrapped with 15s timeout)");
-    const token = await Promise.race([
-      (async () => { try { return await pesapal.getToken(); } catch(e) { throw e; } })(),
-      new Promise((_r, rej) => setTimeout(() => rej(new Error("pesapal getToken timeout (15s)")), 15000))
-    ]).catch(e => {
-      console.error("[pesapal] getToken() failed or timed out:", e && e.message ? e.message : String(e));
-      throw e;
-    });
-    console.log("[pesapal] getToken() returned type:", typeof token, " — token preview:", (token && (token.access_token || token.token)) ? String(token.access_token || token.token).slice(0,16) + "…" : (token ? "[object]" : "[none]"));
-
-    // Step 2: Prepare order
-    const order = {
-      id: reference,
-      currency: "UGX",
-      amount,
-      description: description || "Order Payment",
-      callback_url: process.env.PESAPAL_CALLBACK,
-      billing_address: {
-        email_address: "test@example.com",
-        phone_number: "0700000000",
-        country_code: "UG",
-        first_name: "Test",
-        last_name: "User"
-      }
-    };
-
-    // Step 3: Send to Pesapal
-    const response = await pesapal.submitOrderRequest(order, token);
-
-    return res.json({
-      ok: true,
-      order_tracking_id: response.order_tracking_id,
-      redirect_url: response.redirect_url
-    });
-
-  } catch (error) {
-    console.error("Pesapal v3 Error:", error?.response?.data || error);
-    return res.status(500).json({
-      ok: false,
-      error: error.message || "Pesapal error",
-      detail: error.response?.data || null
-    });
-  }
-});
-
-// Debug endpoint to confirm keys
-router.get('/debug-keys', (req, res) => {
-  function mask(s) {
-    if (!s) return '';
-    const start = s.slice(0,4);
-    const end = s.slice(-4);
-    return `${start}…${end}`;
-  }
-
-  return res.json({
-    ok: true,
-    key: mask(process.env.PESAPAL_CONSUMER_KEY || ''),
-    secret: mask(process.env.PESAPAL_CONSUMER_SECRET || ''),
-    callback: process.env.PESAPAL_CALLBACK || ''
+// helper to send consistent "payments disabled" response
+function paymentsDisabled(req, res) {
+  res.status(503).json({
+    ok: false,
+    message: 'Payments are temporarily disabled on this deployment. Contact the dev team to re-enable.'
   });
+}
+
+if (isDisabled) {
+  // All endpoints just return disabled
+  router.all('*', paymentsDisabled);
+  module.exports = router;
+  return;
+}
+
+// Try to load the pesapal module but do not crash if it doesn't exist
+let pesapal;
+try {
+  pesapal = require('pesapaljs-v3').init; // library exposes init function
+} catch (err) {
+  console.warn('[pesapal] pesapaljs-v3 not available, payments disabled:', err && err.message);
+  router.all('*', paymentsDisabled);
+  module.exports = router;
+  return;
+}
+
+// If we get here, pesapal module loaded; set up minimal working endpoints.
+// Note: this is intentionally minimal; restore original logic when ready.
+
+router.get('/health', (req, res) => res.json({ ok: true, pesapal: 'module-loaded' }));
+
+// token route example (only if you need it)
+router.post('/token', async (req, res) => {
+  try {
+    const config = {
+      consumerKey: process.env.PESAPAL_CONSUMER_KEY,
+      consumerSecret: process.env.PESAPAL_CONSUMER_SECRET,
+      baseUrl: process.env.PESAPAL_BASE || 'https://cybqa.pesapal.com/pesapalv3'
+    };
+    const p = pesapal(config);
+    const token = await p.getToken();
+    res.json({ ok: true, token });
+  } catch (e) {
+    console.error('[pesapal] token error', e && e.message);
+    res.status(500).json({ ok: false, error: e && e.message ? e.message : 'token error' });
+  }
 });
 
 module.exports = router;
