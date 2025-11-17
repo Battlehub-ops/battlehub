@@ -7,11 +7,8 @@ const express = require('express');
 const helmet = require('helmet');
 const { MongoClient } = require('mongodb');
 const cors = require('cors');
-const requestLogger = require('./middleware/request-logger');
-const errorHandler = require('./middleware/error-handler');
 
 const app = express();
-app.use(requestLogger);
 app.use(helmet());
 app.use(express.json());
 
@@ -43,6 +40,7 @@ const corsOptions = {
   optionsSuccessStatus: 200,
 };
 
+app.use(cors(corsOptions));
 
 
 // Handle preflight (OPTIONS) requests globally
@@ -104,37 +102,6 @@ function requireAdminKey(req, res, next) {
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime() });
 });
-app.get('/livez', (req, res) => {
-  res.json({ ok: true });
-});
-
-app.get('/readyz', (req, res) => {
-  const ready = mongoConnected;
-  if (!ready) return res.status(503).json({ ok: false, reason: 'mongo not connected' });
-  res.json({ ok: true });
-});
-
-app.get('/metrics', (req, res) => {
-  const mem = process.memoryUsage();
-  res.json({
-    ok: true,
-    uptime: process.uptime(),
-    memory: {
-      rss: mem.rss,
-      heapTotal: mem.heapTotal,
-      heapUsed: mem.heapUsed,
-      external: mem.external
-    }
-  });
-});
-
-
-app.get('/healthz', (req, res) => {
-  res.json({ ok: true });
-});
-
-app.use(cors(corsOptions));
-
 
 // ----- admin endpoints (safe) -----
 app.post('/admin/run-matchmaking', requireAdminKey, async (req, res) => {
@@ -247,6 +214,7 @@ app.use('/admin/games', require('./routes/games'));
 
 app.use('/admin/pesapal', require('./routes/pesapal'));
 
+app.use('/admin/pesapal', require('./routes/pesapal');
 // ----- SAFE fallback (avoid path-to-regexp issues) -----
 app.use((req, res, next) => {
   if (req.path && req.path.startsWith('/admin/')) {
@@ -254,12 +222,6 @@ app.use((req, res, next) => {
   }
   return next();
 });
-
-app.use(errorHandler);
-app.get('/healthz', (req, res) => {
-  res.json({ ok: true });
-});
-
 
 // ------ Mongo + Server Startup (replaces old app.listen block) ------
 const mongoose = require('mongoose');

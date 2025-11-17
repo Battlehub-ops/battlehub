@@ -1,0 +1,83 @@
+const express = require('express');
+const router = express.Router();
+const pesapalInit = require('pesapaljs-v3').init;   // correct import for v3
+
+// Create Order (PESAPAL v3)
+router.post('/create-order', async (req, res) => {
+  try {
+    const { amount, reference, description } = req.body;
+
+    if (!amount || !reference) {
+      return res.status(400).json({ ok: false, error: "Missing amount or reference" });
+    }
+
+    const pesapal = pesapalInit({
+      consumer_key: process.env.PESAPAL_CONSUMER_KEY,
+      consumer_secret: process.env.PESAPAL_CONSUMER_SECRET,
+      is_live: false, // sandbox mode for now
+    });
+
+    // Step 1: Get access token
+    console.log("[pesapal] calling getToken() (wrapped with 15s timeout)");
+    const token = await Promise.race([
+      (async () => { try { return await pesapal.getToken(); } catch(e) { throw e; } })(),
+      new Promise((_r, rej) => setTimeout(() => rej(new Error("pesapal getToken timeout (15s)")), 15000))
+    ]).catch(e => {
+      console.error("[pesapal] getToken() failed or timed out:", e && e.message ? e.message : String(e));
+      throw e;
+    });
+    console.log("[pesapal] getToken() returned type:", typeof token, " — token preview:", (token && (token.access_token || token.token)) ? String(token.access_token || token.token).slice(0,16) + "…" : (token ? "[object]" : "[none]"));
+
+    // Step 2: Prepare order
+    const order = {
+      id: reference,
+      currency: "UGX",
+      amount,
+      description: description || "Order Payment",
+      callback_url: process.env.PESAPAL_CALLBACK,
+      billing_address: {
+        email_address: "test@example.com",
+        phone_number: "0700000000",
+        country_code: "UG",
+        first_name: "Test",
+        last_name: "User"
+      }
+    };
+
+    // Step 3: Send to Pesapal
+    const response = await pesapal.submitOrderRequest(order, token);
+
+    return res.json({
+      ok: true,
+      order_tracking_id: response.order_tracking_id,
+      redirect_url: response.redirect_url
+    });
+
+  } catch (error) {
+    console.error("Pesapal v3 Error:", error?.response?.data || error);
+    return res.status(500).json({
+      ok: false,
+      error: error.message || "Pesapal error",
+      detail: error.response?.data || null
+    });
+  }
+});
+
+// Debug endpoint to confirm keys
+router.get('/debug-keys', (req, res) => {
+  function mask(s) {
+    if (!s) return '';
+    const start = s.slice(0,4);
+    const end = s.slice(-4);
+    return `${start}…${end}`;
+  }
+
+  return res.json({
+    ok: true,
+    key: mask(process.env.PESAPAL_CONSUMER_KEY || ''),
+    secret: mask(process.env.PESAPAL_CONSUMER_SECRET || ''),
+    callback: process.env.PESAPAL_CALLBACK || ''
+  });
+});
+
+module.exports = router;

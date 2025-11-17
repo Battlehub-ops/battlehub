@@ -8,3 +8,13 @@ npm-debug.log
 yarn-error.log
 coverage/
 .vscode/
+server/logs/
+server/node_modules/
+client/node_modules/
+.env.*
+*.log
+
+client/client/
+server/client/
+server/unpaid-matches.json
+test-pesapal-token.js

@@ -7,11 +7,12 @@ const express = require('express');
 const helmet = require('helmet');
 const { MongoClient } = require('mongodb');
 const cors = require('cors');
-const requestLogger = require('./middleware/request-logger');
-const errorHandler = require('./middleware/error-handler');
 
 const app = express();
-app.use(requestLogger);
+app.use((req, res, next) => {
+  console.log('🔥 TOP-LEVEL REQUEST:', req.method, req.url);
+  next();
+});
 app.use(helmet());
 app.use(express.json());
 
@@ -43,6 +44,7 @@ const corsOptions = {
   optionsSuccessStatus: 200,
 };
 
+app.use(cors(corsOptions));
 
 
 // Handle preflight (OPTIONS) requests globally
@@ -104,37 +106,6 @@ function requireAdminKey(req, res, next) {
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime() });
 });
-app.get('/livez', (req, res) => {
-  res.json({ ok: true });
-});
-
-app.get('/readyz', (req, res) => {
-  const ready = mongoConnected;
-  if (!ready) return res.status(503).json({ ok: false, reason: 'mongo not connected' });
-  res.json({ ok: true });
-});
-
-app.get('/metrics', (req, res) => {
-  const mem = process.memoryUsage();
-  res.json({
-    ok: true,
-    uptime: process.uptime(),
-    memory: {
-      rss: mem.rss,
-      heapTotal: mem.heapTotal,
-      heapUsed: mem.heapUsed,
-      external: mem.external
-    }
-  });
-});
-
-
-app.get('/healthz', (req, res) => {
-  res.json({ ok: true });
-});
-
-app.use(cors(corsOptions));
-
 
 // ----- admin endpoints (safe) -----
 app.post('/admin/run-matchmaking', requireAdminKey, async (req, res) => {
@@ -243,6 +214,14 @@ app.get('/admin/db-info', requireAdminKey, async (req, res) => {
   }
 });
 
+// ---- DEBUG: log every incoming request (temporary) ----
+app.use((req, res, next) => {
+  console.log('👉 REQ', new Date().toISOString(), req.method, req.path, 'content-length=', req.header('content-length') || 0, 'x-admin-key=', req.header('x-admin-key') ? '[present]' : '[missing]');
+  // don't print full headers or body (to avoid secrets)
+  next();
+});
+// ---- end debug middleware ----
+
 app.use('/admin/games', require('./routes/games'));
 
 app.use('/admin/pesapal', require('./routes/pesapal'));
@@ -254,12 +233,6 @@ app.use((req, res, next) => {
   }
   return next();
 });
-
-app.use(errorHandler);
-app.get('/healthz', (req, res) => {
-  res.json({ ok: true });
-});
-
 
 // ------ Mongo + Server Startup (replaces old app.listen block) ------
 const mongoose = require('mongoose');
