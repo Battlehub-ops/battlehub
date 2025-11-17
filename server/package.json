@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
+    "start": "./start.sh",
     "dev": "nodemon index.js",
     "payout": "node scripts/payout-unpaid.js --apply",
     "scheduler": "node scripts/scheduler.js"
@@ -23,7 +23,11 @@
     "jsonwebtoken": "^9.0.2",
     "mongodb": "^7.0.0",
     "mongoose": "^8.19.2",
-    "stripe": "^19.2.0"
+    "node-fetch": "^2.7.0",
+    "oauth-1.0a": "^2.2.6",
+    "pesapaljs-v3": "^1.0.13",
+    "stripe": "^19.2.0",
+    "xml2js": "^0.6.2"
   },
   "devDependencies": {
     "nodemon": "^3.1.10"
